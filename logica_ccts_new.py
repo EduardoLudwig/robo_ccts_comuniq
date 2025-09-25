@@ -1,3 +1,4 @@
+import time
 import os
 import re
 import shutil
@@ -125,18 +126,18 @@ def fazer_login(driver, wait, usuario, senha):
         wait.until(EC.presence_of_element_located((By.XPATH, "//input[@formcontrolname='username']"))).send_keys(usuario)
         driver.find_element(By.XPATH, "//input[@formcontrolname='password']").send_keys(senha)
         driver.find_element(By.XPATH, "//button[contains(text(), 'Entrar')]").click()
-        wait.until(EC.url_to_be(URL_WIKI))
-        print("Login realizado com sucesso e página da Wiki carregada.")
+        print("Login realizado com sucesso.")
+        time.sleep(4)
         return True
     except Exception as e:
         print(f"Erro durante o login: {e}")
         return False
 
-def navegar_para_acordos(driver, wait, primeira_vez=False):
+
+def navegar_para_acordos(driver, wait):
     try:
-        if not primeira_vez:
-            driver.get(URL_WIKI)
-        
+        driver.get(URL_WIKI)
+ 
         remuneracao_toggle = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[@aria-label='Toggle Remuneração CS']")))
         remuneracao_toggle.click()
         print("Clicou no Toggle Remuneração CS")
@@ -188,16 +189,18 @@ def upload_arquivo_para_loja(driver, wait, numero_loja_formatado, caminho_arquiv
 
         log("[AÇÃO] Procurando o input de arquivo...", log_file, registrar_em_arquivo=False)
         input_alvo = wait.until(EC.presence_of_all_elements_located((By.XPATH, "//input[@type='file']")))[2]
+        
+        time.sleep(3) # tempo para carregar os arquivos que já estão no input
+
         input_alvo.send_keys(caminho_arquivo_completo)
         log(f"[OK] Arquivo '{os.path.basename(caminho_arquivo_completo)}' enviado para o input.", log_file, registrar_em_arquivo=False)
         
-        # ALTERADO: Espera inteligente para o upload do arquivo.
-        # O robô vai esperar até que um link com o nome "Remover" apareça, indicando que o anexo foi processado.
+        input("Veficar se o upload esta ok:")
+
         log("[INFO] Aguardando confirmação do anexo (esperando pelo botão 'Remover')...", log_file, registrar_em_arquivo=False)
-        wait.until(EC.visibility_of_element_located((By.XPATH, "//a[normalize-space()='Remover']")))
+        wait.until(EC.visibility_of_element_located((By.XPATH, "//a[normalize-space()='Remover Arquivo']")))
         log("[OK] Anexo processado com sucesso pela interface.", log_file, registrar_em_arquivo=False)
 
-        # Clica em Salvar
         log("[AÇÃO] Procurando e clicando no botão 'Salvar'...", log_file, registrar_em_arquivo=False)
         seletor_salvar = "//button[contains(normalize-space(.), 'Salvar') and contains(@class, 'btn-success')]"
         botao_salvar = wait.until(EC.visibility_of_element_located((By.XPATH, seletor_salvar)))
@@ -205,9 +208,6 @@ def upload_arquivo_para_loja(driver, wait, numero_loja_formatado, caminho_arquiv
         wait.until(EC.element_to_be_clickable((By.XPATH, seletor_salvar))).click()
         log(f"[OK] Botão 'Salvar' clicado com sucesso.", log_file, registrar_em_arquivo=False)
 
-        # ALTERADO: Espera robusta para o salvamento e recarregamento da página.
-        # O robô espera o botão 'Ações' da página principal de acordos ficar clicável novamente.
-        # Isso confirma que a operação de salvar foi concluída e a página voltou ao estado inicial.
         log("[INFO] Aguardando a página de acordos recarregar após salvar...", log_file, registrar_em_arquivo=False)
         wait.until(EC.element_to_be_clickable((By.XPATH, "//button[normalize-space(text())='Ações']")))
         
@@ -243,7 +243,7 @@ def processar_arquivos(diretorio_origem, pasta_temp, log_file_path, usuario, sen
             driver.quit()
             return
 
-        if not navegar_para_acordos(driver, wait, primeira_vez=True):
+        if not navegar_para_acordos(driver, wait):
             log("[ERRO FATAL] Falha na navegação inicial.", log_file)
             driver.quit()
             return

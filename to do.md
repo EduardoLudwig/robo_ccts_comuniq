@@ -19,6 +19,23 @@ e o que não foi upado tanto por erro ou por sequencia de bugs ele marca como ou
 
 fazer alguma medida para impedir as sequencias de stacktrace error (SUPER COMUM NO COMUNIQ)
 
+
+**isso também deve se aplicar no robo dos ccts da rede**
+
+
 caso não encontre a loja deve criar um txt explicando que alguem precisa criar a loja.... 
 
 colocar algum icone girando ou uma ampulheta para sinalizar que ele esta trabalhando 
+
+se depois vigência tem algo mas não esta com um _ (underline) só ignorar e formular o nome parando na vigência, as vezes quem analisa escreve ok ou algo do tipo e atrapalha o robo  
+
+ex: 483, 505, 549, 604_SAO JOSE DO CERRITO_FLORIANOPOLIS _SIND0210_2025-2026 (Bruna)
+
+nesse caso formataria no padrao ignorando o que vem depois da vigência
+
+e se caso não tem vigência, só não fazer e marcar de alguma forma para tentar novamente (ele já não faz o que não tem vigência)
+
+no final do processo deve mostrar uma messagebox de alerta com quais documentos deram errado e o porque
+e deve pedir para tentar novamente.
+
+obviamente os que estão marcados como feitos não vai ser feito o upload novamente.

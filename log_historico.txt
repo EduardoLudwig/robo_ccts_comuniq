@@ -1,4 +1,17 @@
 
 --------------------------------------------------------------------------------
-=== INÍCIO DA AUTOMAÇÃO: 2025-09-25 08:47:04 ===
+=== INÍCIO DA AUTOMAÇÃO: 2025-09-25 09:48:07 ===
 
+
+--------------------------------------------------------------------------------
+Processando arquivo: 107, 259_VIAMAO_VIAMAO_SIND0058.pdf
+
+[INFO] Lojas encontradas para este arquivo: 107, 259
+[ERRO] Padrão de VIGÊNCIA (ex: _2025 ou _2025-2027) não encontrado em: 107, 259_VIAMAO_VIAMAO_SIND0058.pdf
+[ERRO] Não foi possível preparar o arquivo 107, 259_VIAMAO_VIAMAO_SIND0058.pdf para upload. Pulando.
+
+--------------------------------------------------------------------------------
+Processando arquivo: 115_CAÇAPAVA-SIND_SIND0115_2024-2026.pdf
+
+[INFO] Lojas encontradas para este arquivo: 115
+[INFO] Arquivo preparado para upload como: CCT_2024-2026.pdf
