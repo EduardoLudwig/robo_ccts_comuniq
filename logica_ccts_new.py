@@ -189,36 +189,88 @@ def upload_arquivo_para_loja(driver, wait, numero_loja_formatado, caminho_arquiv
 
         log("[AÇÃO] Procurando o input de arquivo...", log_file, registrar_em_arquivo=False)
         input_alvo = wait.until(EC.presence_of_all_elements_located((By.XPATH, "//input[@type='file']")))[2]
-        
-        time.sleep(3) # tempo para carregar os arquivos que já estão no input
 
+        log("[INFO] Aguardando a lista de arquivos estabilizar (método de amostragem)...", log_file)
+        timeout = 30  # Tempo máximo de espera em segundos
+        check_interval = 1 # Intervalo entre as verificações
+        stable_checks_required = 3 # A contagem precisa ficar estável por 3 verificações seguidas
+
+        start_time = time.time()
+        last_count = -1
+        stable_counter = 0
+
+        while time.time() - start_time < timeout:
+            current_count = len(driver.find_elements(By.XPATH, "//a[normalize-space()='Remover Arquivo']"))
+            
+            if current_count == last_count:
+                stable_counter += 1
+            else:
+                stable_counter = 0 # Reseta o contador se a contagem mudar
+            
+            if stable_counter >= stable_checks_required:
+                log(f"[OK] A lista de arquivos estabilizou com {current_count} item(s).", log_file)
+                break # Sai do loop, a lista está estável
+            
+            last_count = current_count
+            time.sleep(check_interval)
+        else: # Este else pertence ao while, e executa se o loop terminar por timeout
+            log("[AVISO] Timeout! A lista de arquivos não estabilizou a tempo. A contagem pode estar incorreta.", log_file)
+        # --- FIM DO PLANO D ---
+
+        
+        botoes_remover_antes = driver.find_elements(By.XPATH, "//a[normalize-space()='Remover Arquivo']")
+        contagem_antes = len(botoes_remover_antes)
+        log(f"[INFO] Contagem final antes do upload: {contagem_antes} arquivos anexados.", log_file)
+
+        # Fazer o upload do novo arquivo
         input_alvo.send_keys(caminho_arquivo_completo)
         log(f"[OK] Arquivo '{os.path.basename(caminho_arquivo_completo)}' enviado para o input.", log_file, registrar_em_arquivo=False)
         
+        # Esperar e contar arquivos DEPOIS do upload
+        log("[INFO] Aguardando a interface processar o novo anexo...", log_file)
+        try:
+            wait.until(
+                lambda d: len(d.find_elements(By.XPATH, "//a[normalize-space()='Remover Arquivo']")) == contagem_antes + 1
+            )
+            contagem_depois = contagem_antes + 1
+            log(f"[INFO] Contagem de arquivos após upload: {contagem_depois}.", log_file)
+            log("[SUCESSO] O novo arquivo foi processado corretamente pela interface.", log_file)
+        except TimeoutException:
+            log("[ERRO GRAVE] A interface não processou o novo anexo a tempo. O upload falhou.", log_file)
+            raise Exception("Falha ao verificar o upload do anexo na interface.")
+
         input("Veficar se o upload esta ok:")
 
-        log("[INFO] Aguardando confirmação do anexo (esperando pelo botão 'Remover')...", log_file, registrar_em_arquivo=False)
-        wait.until(EC.visibility_of_element_located((By.XPATH, "//a[normalize-space()='Remover Arquivo']")))
-        log("[OK] Anexo processado com sucesso pela interface.", log_file, registrar_em_arquivo=False)
-
-        log("[AÇÃO] Procurando e clicando no botão 'Salvar'...", log_file, registrar_em_arquivo=False)
         seletor_salvar = "//button[contains(normalize-space(.), 'Salvar') and contains(@class, 'btn-success')]"
-        botao_salvar = wait.until(EC.visibility_of_element_located((By.XPATH, seletor_salvar)))
+        todos_botoes_salvar = driver.find_elements(By.XPATH, seletor_salvar)
+        botoes_visiveis = [btn for btn in todos_botoes_salvar if btn.is_displayed() and btn.is_enabled()]
+        if not botoes_visiveis:
+            log("[ERRO] Nenhum botão 'Salvar' visível e habilitado encontrado.", log_file)
+            return False
+        botao_salvar = botoes_visiveis[0]
         driver.execute_script("arguments[0].scrollIntoView(true);", botao_salvar)
-        wait.until(EC.element_to_be_clickable((By.XPATH, seletor_salvar))).click()
+        time.sleep(1)
+        botao_salvar.click()
         log(f"[OK] Botão 'Salvar' clicado com sucesso.", log_file, registrar_em_arquivo=False)
 
-        log("[INFO] Aguardando a página de acordos recarregar após salvar...", log_file, registrar_em_arquivo=False)
-        wait.until(EC.element_to_be_clickable((By.XPATH, "//button[normalize-space(text())='Ações']")))
-        
-        log("[SUCESSO FINAL] Processo para loja {numero_loja_formatado} concluído.", log_file, registrar_em_arquivo=False)
-        return True
+        time.sleep(3)
 
+        log("[INFO] Aguardando a página de acordos recarregar após salvar...", log_file)
+        wait.until(EC.element_to_be_clickable((By.XPATH, "//button[normalize-space(text())='Ações']")))
+
+        log("[INFO] Upload concluído!")
+        
+        if not navegar_para_acordos(driver, wait):
+            log("[ERRO] Falha ao retornar para a seção de acordos após salvar.", log_file)
+            return False
+        log("[INFO] Tela de acordos recarregada com sucesso para o próximo upload.", log_file, registrar_em_arquivo=False)
+        log(f"[SUCESSO FINAL] Processo para loja {numero_loja_formatado} concluído.", log_file, registrar_em_arquivo=False)
+        return True
     except Exception as e:
         log(f"[ERRO GERAL] Falha no processo de upload para a loja {numero_loja_formatado}. Erro: {e}", log_file)
-        # Em caso de erro, tenta recarregar a página principal de forma segura
-        log("[RECUPERAÇÃO] Tentando retornar para a página principal de acordos...", log_file)
-        navegar_para_acordos(driver, wait, primeira_vez=False)
+        driver.get(URL_WIKI)
+        time.sleep(5)
+        navegar_para_acordos(driver, wait)
         return False
 
 def processar_arquivos(diretorio_origem, pasta_temp, log_file_path, usuario, senha, parar_event=None):

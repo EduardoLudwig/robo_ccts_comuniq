@@ -1,17 +1,32 @@
 
 --------------------------------------------------------------------------------
-=== INÍCIO DA AUTOMAÇÃO: 2025-09-25 09:48:07 ===
+=== INÍCIO DA AUTOMAÇÃO: 2025-09-25 10:47:46 ===
 
 
 --------------------------------------------------------------------------------
-Processando arquivo: 107, 259_VIAMAO_VIAMAO_SIND0058.pdf
+Processando arquivo: 107, 259_VIAMAO_VIAMAO_SIND0058_2025-2027.pdf
 
 [INFO] Lojas encontradas para este arquivo: 107, 259
-[ERRO] Padrão de VIGÊNCIA (ex: _2025 ou _2025-2027) não encontrado em: 107, 259_VIAMAO_VIAMAO_SIND0058.pdf
-[ERRO] Não foi possível preparar o arquivo 107, 259_VIAMAO_VIAMAO_SIND0058.pdf para upload. Pulando.
+[INFO] Arquivo preparado para upload como: CCT_2025-2027.pdf
+[INFO] Aguardando a lista de arquivos estabilizar (método de amostragem)...
+[OK] A lista de arquivos estabilizou com 6 item(s).
+[INFO] Contagem final antes do upload: 6 arquivos anexados.
+[INFO] Aguardando a interface processar o novo anexo...
+[INFO] Contagem de arquivos após upload: 7.
+[SUCESSO] O novo arquivo foi processado corretamente pela interface.
+[INFO] Aguardando a página de acordos recarregar após salvar...
+[INFO] Aguardando a lista de arquivos estabilizar (método de amostragem)...
+[OK] A lista de arquivos estabilizou com 6 item(s).
+[INFO] Contagem final antes do upload: 6 arquivos anexados.
+[INFO] Aguardando a interface processar o novo anexo...
+[INFO] Contagem de arquivos após upload: 7.
+[SUCESSO] O novo arquivo foi processado corretamente pela interface.
+[INFO] Aguardando a página de acordos recarregar após salvar...
+[RESUMO SUCESSO] Upload concluído para as lojas: 107, 259 | Documento: 107, 259_VIAMAO_VIAMAO_SIND0058_2025-2027.pdf
+[INFO] Arquivo temporário 'CCT_2025-2027.pdf' removido.
 
 --------------------------------------------------------------------------------
-Processando arquivo: 115_CAÇAPAVA-SIND_SIND0115_2024-2026.pdf
+Processando arquivo: 232, 240, 274, 327, 368, 396, 575_PATO BRANCO_SIND0122_2025-2026.pdf
 
-[INFO] Lojas encontradas para este arquivo: 115
-[INFO] Arquivo preparado para upload como: CCT_2024-2026.pdf
+[INFO] Lojas encontradas para este arquivo: 232, 240, 274, 327, 368, 396, 575
+[INFO] Arquivo preparado para upload como: CCT_2025-2026.pdf
