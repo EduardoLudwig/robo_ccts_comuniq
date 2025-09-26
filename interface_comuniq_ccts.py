@@ -65,8 +65,28 @@ class App:
         self.botao_editar_login = ctk.CTkButton(self.mainframe, text="Editar Login", text_color="white", font=("Inter", 12, "bold"), width=130, height=30, command=self.abrir_janela_login)
         self.botao_editar_login.grid(row=4, column=2, sticky="e", padx=20, pady=15)
 
-        self.label_status = ctk.CTkLabel(self.mainframe, text="", font=("arial", 14, "bold"), fg_color="#333333", corner_radius=10, wraplength=700)
-        self.label_status.grid(row=3, column=1, columnspan=2, sticky="ew", padx=15, pady=(10, 5))
+        self.status_frame = ctk.CTkFrame(self.mainframe, fg_color="transparent")
+        self.status_frame.grid(row=3, column=1, columnspan=2, sticky="ew", padx=15, pady=(10, 5))
+
+        self.status_frame.grid_columnconfigure(0, weight=1) 
+        self.status_frame.grid_columnconfigure(1, weight=0) 
+
+        self.spinner_label = ctk.CTkLabel(self.status_frame, text="", font=("Courier", 20, "bold"))
+        self.spinner_label.grid(row=0, column=1, padx=(10, 0))
+
+        self.label_status = ctk.CTkLabel(self.status_frame, text="", font=("arial", 14, "bold"), fg_color="#333333", corner_radius=10, wraplength=700)
+        self.label_status.grid(row=0, column=0, sticky="ew")
+        
+        self.spinner_running = False
+        self.spinner_chars = ["|", "/", "-", "\\"]
+
+    def animate_spinner(self, index=0):
+        if self.spinner_running:
+            self.spinner_label.configure(text=self.spinner_chars[index])
+            
+            next_index = (index + 1) % len(self.spinner_chars)
+            
+            self.root.after(150, self.animate_spinner, next_index)
 
     def carregar_credenciais(self):
         try:
@@ -110,7 +130,11 @@ class App:
 
         def executar_processo():
             try:
+                self.spinner_running = True
+                self.root.after(0, self.animate_spinner)
+
                 self.label_status.configure(text="Por favor aguarde, isso pode levar alguns minutos.")
+               
                 processar_arquivos(
                     self.diretorio_ccts, pasta_temp, log_path,
                     self.usuario, self.senha, self.parar_event
@@ -122,6 +146,11 @@ class App:
             except Exception as e:
                 self.label_status.configure(text=f"Erro durante o processo: {e}")
                 messagebox.showerror("Erro", f"Ocorreu um erro durante o processamento: {e}. Verifique o log para mais detalhes.")
+
+            finally:
+                self.spinner_running = False
+                self.spinner_label.configure(text="")
+
 
         self.thread = threading.Thread(target=executar_processo)
         self.thread.start()

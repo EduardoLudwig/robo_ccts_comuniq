@@ -1,107 +1,40 @@
 
 --------------------------------------------------------------------------------
-=== INÍCIO DA AUTOMAÇÃO: 2025-09-25 13:43:09 ===
+=== INÍCIO DA AUTOMAÇÃO: 2025-09-25 15:52:40 ===
 
-Encontrados 8 arquivos para processar.
-
---------------------------------------------------------------------------------
-Processando arquivo: 439,459, 478, 490, 525, 569, 592, 609, 610, 622_FECEP_SIND0195_2025-2026.pdf
-
-[INFO] Arquivo preparado para upload como: CCT_2025-2026.pdf
-[INFO] Contagem antes do upload: 5 arquivos.
-[OK] Arquivo 'CCT_2025-2026.pdf' enviado para a loja 439.
-[INFO] Contagem antes do upload: 5 arquivos.
-[OK] Arquivo 'CCT_2025-2026.pdf' enviado para a loja 459.
-[INFO] Contagem antes do upload: 4 arquivos.
-[OK] Arquivo 'CCT_2025-2026.pdf' enviado para a loja 478.
-[INFO] Contagem antes do upload: 4 arquivos.
-[OK] Arquivo 'CCT_2025-2026.pdf' enviado para a loja 490.
-[INFO] Contagem antes do upload: 4 arquivos.
-[OK] Arquivo 'CCT_2025-2026.pdf' enviado para a loja 525.
-[INFO] Contagem antes do upload: 4 arquivos.
-[OK] Arquivo 'CCT_2025-2026.pdf' enviado para a loja 569.
-[INFO] Contagem antes do upload: 3 arquivos.
-[OK] Arquivo 'CCT_2025-2026.pdf' enviado para a loja 592.
-[INFO] Contagem antes do upload: 2 arquivos.
-[OK] Arquivo 'CCT_2025-2026.pdf' enviado para a loja 609.
-[INFO] Contagem antes do upload: 3 arquivos.
-[OK] Arquivo 'CCT_2025-2026.pdf' enviado para a loja 610.
-[INFO] Contagem antes do upload: 3 arquivos.
-[OK] Arquivo 'CCT_2025-2026.pdf' enviado para a loja 622.
-[INFO] Arquivo movido e renomeado para: M:/Remuneração e Benefícios/SINDICAIS/Analises Sindicatos Lojas 2025/09_SETEMBRO/ENVIADAS\Feitos\[FEITO]_439,459, 478, 490, 525, 569, 592, 609, 610, 622_FECEP_SIND0195_2025-2026.pdf
+Encontrados 3 arquivos para processar em 'M:/Remuneração e Benefícios/SINDICAIS/Analises sindicatos lojas 2025/09_SETEMBRO/ENVIADAS/thai/atualizar no salário certo/Falhas_Requer_Acao_Manual'.
 
 --------------------------------------------------------------------------------
-Processando arquivo: 483, 505, 549, 604_SAO JOSE DO CERRITO_FLORIANOPOLIS _SIND0210_2025-2026.pdf
+Processando arquivo: [FALHA_MANUAL]_273_SAO BENTO DO SUL_SAO BENTO DO SUL_SIND0165_2025-2026.pdf
 
-[INFO] Arquivo preparado para upload como: CCT_2025-2026.pdf
-[INFO] Contagem antes do upload: 4 arquivos.
-[OK] Arquivo 'CCT_2025-2026.pdf' enviado para a loja 483.
-[INFO] Contagem antes do upload: 4 arquivos.
-[OK] Arquivo 'CCT_2025-2026.pdf' enviado para a loja 505.
-[INFO] Contagem antes do upload: 3 arquivos.
-[OK] Arquivo 'CCT_2025-2026.pdf' enviado para a loja 549.
-[INFO] Contagem antes do upload: 2 arquivos.
-[OK] Arquivo 'CCT_2025-2026.pdf' enviado para a loja 604.
-[INFO] Arquivo movido e renomeado para: M:/Remuneração e Benefícios/SINDICAIS/Analises Sindicatos Lojas 2025/09_SETEMBRO/ENVIADAS\Feitos\[FEITO]_483, 505, 549, 604_SAO JOSE DO CERRITO_FLORIANOPOLIS _SIND0210_2025-2026.pdf
+(Nome limpo para processamento: 273_SAO BENTO DO SUL_SAO BENTO DO SUL_SIND0165_2025-2026.pdf)
+[INFO] Arquivo '[FALHA_MANUAL]_273_SAO BENTO DO SUL_SAO BENTO DO SUL_SIND0165_2025-2026.pdf' preparado para upload como: CCT_2025-2026.pdf
+[INFO] Contagem antes do upload para '[FALHA_MANUAL]_273_SAO BENTO DO SUL_SAO BENTO DO SUL_SIND0165_2025-2026.pdf': 6 arquivos.
+[OK] Anexado '[FALHA_MANUAL]_273_SAO BENTO DO SUL_SAO BENTO DO SUL_SIND0165_2025-2026.pdf' para a loja 273.
+[INFO] Arquivo movido e renomeado para: M:/Remuneração e Benefícios/SINDICAIS/Analises sindicatos lojas 2025/09_SETEMBRO/ENVIADAS/thai/atualizar no salário certo\Feitos\[FEITO]_273_SAO BENTO DO SUL_SAO BENTO DO SUL_SIND0165_2025-2026.pdf
 
 --------------------------------------------------------------------------------
-Processando arquivo: 495, 502_MARINGÁ_SIND0208_2025-2026.pdf
+Processando arquivo: [FALHA_MANUAL]_377, 419_XANXERE_SIND0188_2025-2026.pdf
 
-[INFO] Arquivo preparado para upload como: CCT_2025-2026.pdf
-[INFO] Contagem antes do upload: 5 arquivos.
-[OK] Arquivo 'CCT_2025-2026.pdf' enviado para a loja 495.
-[INFO] Contagem antes do upload: 5 arquivos.
-[OK] Arquivo 'CCT_2025-2026.pdf' enviado para a loja 502.
-[INFO] Arquivo movido e renomeado para: M:/Remuneração e Benefícios/SINDICAIS/Analises Sindicatos Lojas 2025/09_SETEMBRO/ENVIADAS\Feitos\[FEITO]_495, 502_MARINGÁ_SIND0208_2025-2026.pdf
-
---------------------------------------------------------------------------------
-Processando arquivo: 602_SÃO JERÔNIMO_SIND0241_2024-2026.pdf
-
-[INFO] Arquivo preparado para upload como: CCT_2024-2026.pdf
-[INFO] Contagem antes do upload: 2 arquivos.
-[OK] Arquivo 'CCT_2024-2026.pdf' enviado para a loja 602.
-[INFO] Arquivo movido e renomeado para: M:/Remuneração e Benefícios/SINDICAIS/Analises Sindicatos Lojas 2025/09_SETEMBRO/ENVIADAS\Feitos\[FEITO]_602_SÃO JERÔNIMO_SIND0241_2024-2026.pdf
+(Nome limpo para processamento: 377, 419_XANXERE_SIND0188_2025-2026.pdf)
+[INFO] Arquivo '[FALHA_MANUAL]_377, 419_XANXERE_SIND0188_2025-2026.pdf' preparado para upload como: CCT_2025-2026.pdf
+[INFO] Contagem antes do upload para '[FALHA_MANUAL]_377, 419_XANXERE_SIND0188_2025-2026.pdf': 1 arquivos.
+[OK] Anexado '[FALHA_MANUAL]_377, 419_XANXERE_SIND0188_2025-2026.pdf' para a loja 377.
+[INFO] Contagem antes do upload para '[FALHA_MANUAL]_377, 419_XANXERE_SIND0188_2025-2026.pdf': 2 arquivos.
+[OK] Anexado '[FALHA_MANUAL]_377, 419_XANXERE_SIND0188_2025-2026.pdf' para a loja 419.
+[INFO] Arquivo movido e renomeado para: M:/Remuneração e Benefícios/SINDICAIS/Analises sindicatos lojas 2025/09_SETEMBRO/ENVIADAS/thai/atualizar no salário certo\Feitos\[FEITO]_377, 419_XANXERE_SIND0188_2025-2026.pdf
 
 --------------------------------------------------------------------------------
-Processando arquivo: 651_APUCARANA_SIND0256_2025-2026 (Bruna).pdf
+Processando arquivo: [FALHA_MANUAL]_380, 400_GUARAMIRIM_JARAGUA DO SUL _SIND0179_2025-2026.pdf
 
-[INFO] Arquivo preparado para upload como: CCT_2025-2026_ (Bruna).pdf
-[INFO] Contagem antes do upload: 2 arquivos.
-[OK] Arquivo 'CCT_2025-2026_ (Bruna).pdf' enviado para a loja 651.
-[INFO] Arquivo movido e renomeado para: M:/Remuneração e Benefícios/SINDICAIS/Analises Sindicatos Lojas 2025/09_SETEMBRO/ENVIADAS\Feitos\[FEITO]_651_APUCARANA_SIND0256_2025-2026 (Bruna).pdf
-
---------------------------------------------------------------------------------
-Processando arquivo: 69_SÃO FRANCISCO DE ASSIS_SIND0194_2025-2026.pdf
-
-[INFO] Arquivo preparado para upload como: CCT_2025-2026.pdf
-[INFO] Contagem antes do upload: 6 arquivos.
-[OK] Arquivo 'CCT_2025-2026.pdf' enviado para a loja 069.
-[INFO] Arquivo movido e renomeado para: M:/Remuneração e Benefícios/SINDICAIS/Analises Sindicatos Lojas 2025/09_SETEMBRO/ENVIADAS\Feitos\[FEITO]_69_SÃO FRANCISCO DE ASSIS_SIND0194_2025-2026.pdf
+(Nome limpo para processamento: 380, 400_GUARAMIRIM_JARAGUA DO SUL _SIND0179_2025-2026.pdf)
+[INFO] Arquivo '[FALHA_MANUAL]_380, 400_GUARAMIRIM_JARAGUA DO SUL _SIND0179_2025-2026.pdf' preparado para upload como: CCT_2025-2026.pdf
+[INFO] Contagem antes do upload para '[FALHA_MANUAL]_380, 400_GUARAMIRIM_JARAGUA DO SUL _SIND0179_2025-2026.pdf': 5 arquivos.
+[OK] Anexado '[FALHA_MANUAL]_380, 400_GUARAMIRIM_JARAGUA DO SUL _SIND0179_2025-2026.pdf' para a loja 380.
+[INFO] Contagem antes do upload para '[FALHA_MANUAL]_380, 400_GUARAMIRIM_JARAGUA DO SUL _SIND0179_2025-2026.pdf': 6 arquivos.
+[OK] Anexado '[FALHA_MANUAL]_380, 400_GUARAMIRIM_JARAGUA DO SUL _SIND0179_2025-2026.pdf' para a loja 400.
+[INFO] Arquivo movido e renomeado para: M:/Remuneração e Benefícios/SINDICAIS/Analises sindicatos lojas 2025/09_SETEMBRO/ENVIADAS/thai/atualizar no salário certo\Feitos\[FEITO]_380, 400_GUARAMIRIM_JARAGUA DO SUL _SIND0179_2025-2026.pdf
 
 --------------------------------------------------------------------------------
-Processando arquivo: 75,213_LAGOA VERMELHA_SIND0027_2025-2026.pdf
-
-[INFO] Arquivo preparado para upload como: CCT_2025-2026.pdf
-[INFO] Contagem antes do upload: 6 arquivos.
-[OK] Arquivo 'CCT_2025-2026.pdf' enviado para a loja 075.
-[INFO] Contagem antes do upload: 8 arquivos.
-[OK] Arquivo 'CCT_2025-2026.pdf' enviado para a loja 213.
-[INFO] Arquivo movido e renomeado para: M:/Remuneração e Benefícios/SINDICAIS/Analises Sindicatos Lojas 2025/09_SETEMBRO/ENVIADAS\Feitos\[FEITO]_75,213_LAGOA VERMELHA_SIND0027_2025-2026.pdf
-
---------------------------------------------------------------------------------
-Processando arquivo: 93,190,195,300_BAGÉ_SIND0138_2025-2026.pdf
-
-[INFO] Arquivo preparado para upload como: CCT_2025-2026.pdf
-[INFO] Contagem antes do upload: 6 arquivos.
-[OK] Arquivo 'CCT_2025-2026.pdf' enviado para a loja 093.
-[INFO] Contagem antes do upload: 6 arquivos.
-[OK] Arquivo 'CCT_2025-2026.pdf' enviado para a loja 190.
-[INFO] Contagem antes do upload: 6 arquivos.
-[OK] Arquivo 'CCT_2025-2026.pdf' enviado para a loja 195.
-[INFO] Contagem antes do upload: 6 arquivos.
-[OK] Arquivo 'CCT_2025-2026.pdf' enviado para a loja 300.
-[INFO] Arquivo movido e renomeado para: M:/Remuneração e Benefícios/SINDICAIS/Analises Sindicatos Lojas 2025/09_SETEMBRO/ENVIADAS\Feitos\[FEITO]_93,190,195,300_BAGÉ_SIND0138_2025-2026.pdf
-
---------------------------------------------------------------------------------
-=== FIM DA AUTOMAÇÃO: 2025-09-25 13:55:16 ===
+=== FIM DA AUTOMAÇÃO: 2025-09-25 15:55:12 ===
 
