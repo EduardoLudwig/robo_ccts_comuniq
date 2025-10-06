@@ -154,7 +154,7 @@ def navegar_para_acordos(driver, wait):
         print(f"Erro ao navegar para a seção de acordos: {e}")
         return False
 
-def mover_e_renomear_arquivo(caminho_arquivo_original, pasta_destino, prefixo, log_file):
+def mover_e_renomear_arquivo(caminho_arquivo_original, pasta_destino, sufixo_tag, log_file):
     try:
         nome_base_arquivo = os.path.basename(caminho_arquivo_original)
 
@@ -164,7 +164,9 @@ def mover_e_renomear_arquivo(caminho_arquivo_original, pasta_destino, prefixo, l
         elif nome_limpo.startswith("[FALHA_MANUAL]_"):
             nome_limpo = nome_limpo[len("[FALHA_MANUAL]_"):]
         
-        novo_nome = f"{prefixo}_{nome_limpo}"
+        nome_base, extensao = os.path.splitext(nome_limpo)
+        
+        novo_nome = f"{nome_base}_{sufixo_tag}{extensao}"
         
         caminho_destino_final = os.path.join(pasta_destino, novo_nome)
         
@@ -256,10 +258,17 @@ def processar_um_unico_arquivo(driver, wait, nome_arquivo, log_file):
     nome_arquivo_completo = nome_arquivo
     
     nome_arquivo_limpo = nome_arquivo
-    if nome_arquivo_limpo.startswith("[FEITO]_"):
-        nome_arquivo_limpo = nome_arquivo_limpo[len("[FEITO]_"):]
-    elif nome_arquivo_limpo.startswith("[FALHA_MANUAL]_"):
-        nome_arquivo_limpo = nome_arquivo_limpo[len("[FALHA_MANUAL]_"):]
+    nome_base, extensao = os.path.splitext(nome_arquivo)
+
+    sufixo_feito = "_[FEITO]"
+    sufixo_falha = "_[FALHA_MANUAL]"
+
+    if nome_base.endswith(sufixo_feito):
+        nome_base_limpo = nome_base[:-len(sufixo_feito)]
+        nome_arquivo_limpo = nome_base_limpo + extensao
+    elif nome_base.endswith(sufixo_falha):
+        nome_base_limpo = nome_base[:-len(sufixo_falha)]
+        nome_arquivo_limpo = nome_base_limpo + extensao
 
     log(f"Processando arquivo: {nome_arquivo_completo}", log_file, espacamento=True)
     if nome_arquivo_completo != nome_arquivo_limpo:
