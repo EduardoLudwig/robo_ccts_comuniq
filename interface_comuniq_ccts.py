@@ -2,7 +2,7 @@ import customtkinter as ctk
 from tkinter import filedialog, messagebox
 import sys
 import os
-from logica_ccts_new import processar_arquivos
+from logica_ccts import processar_arquivos
 import threading
 import json
 
