@@ -57,6 +57,12 @@ def extrair_numeros_loja(nome_arquivo):
     primeira_parte = nome_arquivo.split('_')[0]
     return re.findall(r'\b\d{1,3}\b', primeira_parte)
 
+def normalizar(nome):
+    n = nome.strip().lower()
+    n = re.sub(r'\s*\(\d+\)\s*$', '', n)
+    if n.endswith('.pdf'):
+        n = n[:-4]
+    return n
 
 def renomear_e_preparar_arquivo(nome_real_com_prefixo, nome_limpo_para_processar, log_file):
     caminho_origem_completo = os.path.join(DIRETORIO_ORIGEM, nome_real_com_prefixo)
@@ -177,78 +183,82 @@ def mover_e_renomear_arquivo(caminho_arquivo_original, pasta_destino, sufixo_tag
     except Exception as e:
         log(f"[ERRO] Falha ao mover/renomear o arquivo {caminho_arquivo_original}. Erro: {e}", log_file)
 
+def abrir_edicao_da_loja(driver, wait, numero_loja_formatado):
+    try:
+        loja_xpath = f"//span[contains(@class, 'mdc-button__label') and starts-with(normalize-space(.), '{numero_loja_formatado}')]"
+        elemento_loja = wait.until(EC.element_to_be_clickable((By.XPATH, loja_xpath)))
+        driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", elemento_loja)
+        elemento_loja.click()
+    except TimeoutException:
+        return 'LOJA_NAO_ENCONTRADA'
+
+    try:
+        popup_wait = WebDriverWait(driver, 3)
+        botao_cancelar = popup_wait.until(EC.element_to_be_clickable((By.XPATH, "//button[@id='onesignal-slidedown-cancel-button']")))
+        botao_cancelar.click()
+    except TimeoutException:
+        pass
+
+    wait.until(EC.element_to_be_clickable((By.XPATH, "//button[normalize-space(text())='Ações']"))).click()
+    wait.until(EC.element_to_be_clickable((By.XPATH, "//a[normalize-space(text())='Editar']"))).click()
+
+    anexos = wait.until(EC.visibility_of_element_located((By.CSS_SELECTOR, "div.dz-clickable")))
+    driver.execute_script("arguments[0].scrollIntoView(true);", anexos)
+    return 'OK'
+
+def obter_anexos_salvos(driver, wait, log_file):
+
+    timeout = 30; check_interval = 1; stable_checks_required = 3
+    start_time = time.time(); last_count = -1; stable_counter = 0
+    while time.time() - start_time < timeout:
+        current_count = len(driver.find_elements(By.XPATH, "//a[normalize-space()='Remover Arquivo']"))
+        if current_count == last_count:
+            stable_counter += 1
+        else:
+            stable_counter = 0
+        if stable_counter >= stable_checks_required:
+            break
+        last_count = current_count; time.sleep(check_interval)
+    else:
+        log("[AVISO] Timeout! A lista de arquivos não estabilizou a tempo.", log_file)
+
+    nomes_existentes = []
+    try:
+        spans = driver.find_elements(By.CSS_SELECTOR, "span[data-dz-name]")
+        nomes_existentes = [
+            (s.get_attribute('data-dz-name') or s.get_attribute('textContent') or '').strip()
+            for s in spans
+        ]
+        nomes_existentes = [n for n in nomes_existentes if n]
+    except Exception:
+        pass
+    return nomes_existentes
+
 def upload_arquivo_para_loja(driver, wait, numero_loja_formatado, caminho_arquivo_completo, log_file, nome_arquivo_original):
     try:
         log(f"--- Iniciando upload de '{nome_arquivo_original}' para a loja {numero_loja_formatado} ---", log_file, registrar_em_arquivo=False)
         
-        try:
-            loja_xpath = f"//span[contains(@class, 'mdc-button__label') and starts-with(normalize-space(.), '{numero_loja_formatado}')]"
-            elemento_loja = wait.until(EC.element_to_be_clickable((By.XPATH, loja_xpath)))
-            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", elemento_loja)
-            elemento_loja.click()
-            log(f"[OK] Clicou na loja que começa com: {numero_loja_formatado}", log_file, registrar_em_arquivo=False)
-        except TimeoutException:
+        status_loja = abrir_edicao_da_loja(driver, wait, numero_loja_formatado)
+        if status_loja == 'LOJA_NAO_ENCONTRADA':
             log(f"[ERRO MANUAL] Loja {numero_loja_formatado} não encontrada para o arquivo '{nome_arquivo_original}'.", log_file)
             return 'FALHA_LOJA_NAO_ENCONTRADA'
 
-        try:
-            popup_wait = WebDriverWait(driver, 3)
-            popup_cancel_button_xpath = "//button[@id='onesignal-slidedown-cancel-button']"
-            botao_cancelar = popup_wait.until(EC.element_to_be_clickable((By.XPATH, popup_cancel_button_xpath)))
-            botao_cancelar.click()
-        except TimeoutException:
-            pass
-        
-        wait.until(EC.element_to_be_clickable((By.XPATH, "//button[normalize-space(text())='Ações']"))).click()
-        wait.until(EC.element_to_be_clickable((By.XPATH, "//a[normalize-space(text())='Editar']"))).click()
-        
-        anexos = wait.until(EC.visibility_of_element_located((By.CSS_SELECTOR, "div.dz-clickable")))
-        driver.execute_script("arguments[0].scrollIntoView(true);", anexos)
-        
         input_alvo = wait.until(EC.presence_of_all_elements_located((By.XPATH, "//input[@type='file']")))[2]
-
-        timeout = 30; check_interval = 1; stable_checks_required = 3
-        start_time = time.time(); last_count = -1; stable_counter = 0
-        while time.time() - start_time < timeout:
-            current_count = len(driver.find_elements(By.XPATH, "//a[normalize-space()='Remover Arquivo']"))
-            if current_count == last_count: stable_counter += 1
-            else: stable_counter = 0
-            if stable_counter >= stable_checks_required: break
-            last_count = current_count; time.sleep(check_interval)
-        else:
-            log("[AVISO] Timeout! A lista de arquivos não estabilizou a tempo.", log_file)
-
-        botoes_remover_antes = driver.find_elements(By.XPATH, "//a[normalize-space()='Remover Arquivo']")
-        contagem_antes = len(botoes_remover_antes)
-        log(f"[INFO] Contagem antes do upload para '{nome_arquivo_original}': {contagem_antes} arquivos.", log_file)
 
         nome_final_alvo = os.path.basename(caminho_arquivo_completo)
 
-        nomes_existentes = []
-        try:
-            spans = driver.find_elements(By.CSS_SELECTOR, "span[data-dz-name]")
-            nomes_existentes = [
-                (s.get_attribute('data-dz-name') or s.get_attribute('textContent') or '').strip()
-                for s in spans
-            ]
-            nomes_existentes = [n for n in nomes_existentes if n]
-        except Exception:
-            pass
+        nomes_existentes = obter_anexos_salvos(driver, wait, log_file)
         log(f"[DEBUG] Anexos na loja {numero_loja_formatado}: {nomes_existentes}", log_file)
-        
-        def normalizar(nome):
-            n = nome.strip().lower()
-            n = re.sub(r'\s*\(\d+\)\s*$', '', n)
-            if n.endswith('.pdf'):
-                n = n[:-4]
-            return n
+
+        contagem_antes = len(driver.find_elements(By.XPATH, "//a[normalize-space()='Remover Arquivo']"))
+        log(f"[INFO] Contagem antes do upload para '{nome_arquivo_original}': {contagem_antes} arquivos.", log_file)
 
         if any(normalizar(ex) == normalizar(nome_final_alvo) for ex in nomes_existentes):
             log(f"[SKIP] '{nome_final_alvo}' ja existe na loja {numero_loja_formatado}. Pulando.", log_file)
             navegar_para_acordos(driver, wait)
             return 'JA_EXISTE'
         
-        # 
+        #
         input_alvo.send_keys(caminho_arquivo_completo)
         #
 
@@ -272,11 +282,18 @@ def upload_arquivo_para_loja(driver, wait, numero_loja_formatado, caminho_arquiv
         
         time.sleep(3)
         wait.until(EC.element_to_be_clickable((By.XPATH, "//button[normalize-space(text())='Ações']")))
-        
+
+        time.sleep(2)
+        anexos_pos_salvar = obter_anexos_salvos(driver, wait, log_file)
+        if not any(normalizar(a) == normalizar(nome_final_alvo) for a in anexos_pos_salvar):
+            log(f"[AVISO] '{nome_final_alvo}' não confirmado entre os anexos salvos da loja {numero_loja_formatado}.", log_file)
+            navegar_para_acordos(driver, wait)
+            return 'FALHA_VERIFICACAO'
+
         if not navegar_para_acordos(driver, wait):
             raise Exception("Falha ao retornar para a seção de acordos após salvar.")
         
-        log(f"[SUCESSO FINAL] Processo para loja {numero_loja_formatado} concluído.", log_file, registrar_em_arquivo=False)
+        log(f"[SUCESSO CONFIRMADO] '{nome_final_alvo}' confirmado como salvo na loja {numero_loja_formatado}.", log_file, registrar_em_arquivo=False)
         return 'SUCESSO'
 
     except Exception as e:
@@ -285,6 +302,24 @@ def upload_arquivo_para_loja(driver, wait, numero_loja_formatado, caminho_arquiv
         time.sleep(5)
         navegar_para_acordos(driver, wait)
         return 'FALHA_RECUPERAVEL'
+
+def upload_com_verificacao_e_retry(driver, wait, numero_loja_formatado, caminho_arquivo_completo, log_file, nome_arquivo_original):
+    max_tentativas = 3
+    for tentativa in range(1, max_tentativas + 1):
+        resultado = upload_arquivo_para_loja(driver, wait, numero_loja_formatado, caminho_arquivo_completo, log_file, nome_arquivo_original)
+
+        if resultado == 'JA_EXISTE' and tentativa > 1:
+            log(f"[SUCESSO CONFIRMADO] '{nome_arquivo_original}' confirmado na loja {numero_loja_formatado} via retry.", log_file)
+            return 'SUCESSO'
+        if resultado in ('SUCESSO', 'JA_EXISTE', 'FALHA_LOJA_NAO_ENCONTRADA'):
+            return resultado
+
+        log(f"[AVISO] Tentativa {tentativa}/{max_tentativas} falhou ({resultado}) para loja {numero_loja_formatado}.", log_file)
+        if tentativa < max_tentativas:
+            time.sleep(3)
+
+    log(f"[ERRO] Falha confirmada após {max_tentativas} tentativas na loja {numero_loja_formatado}.", log_file)
+    return 'UPLOAD_NAO_CONFIRMADO'
 
 def processar_um_unico_arquivo(driver, wait, nome_arquivo, log_file):
     nome_arquivo_completo = nome_arquivo
@@ -310,7 +345,7 @@ def processar_um_unico_arquivo(driver, wait, nome_arquivo, log_file):
     if nome_arquivo_completo != nome_arquivo_limpo:
         log(f"(Nome limpo para processamento: {nome_arquivo_limpo})", log_file)
 
-    resultados_lojas = {'SUCESSO': [], 'JA_EXISTE': [], 'FALHA_MANUAL': [], 'FALHA_RECUPERAVEL': []}
+    resultados_lojas = {'SUCESSO': [], 'JA_EXISTE': [], 'FALHA_MANUAL': [], 'UPLOAD_NAO_CONFIRMADO': [], 'FALHA_RECUPERAVEL': []}
 
     numeros_loja = extrair_numeros_loja(nome_arquivo_limpo)
     if not numeros_loja:
@@ -322,7 +357,7 @@ def processar_um_unico_arquivo(driver, wait, nome_arquivo, log_file):
 
     for numero in numeros_loja:
         numero_formatado = numero.zfill(3)
-        resultado_upload = upload_arquivo_para_loja(driver, wait, numero_formatado, caminho_arquivo_preparado, log_file, nome_arquivo_completo)
+        resultado_upload = upload_com_verificacao_e_retry(driver, wait, numero_formatado, caminho_arquivo_preparado, log_file, nome_arquivo_completo)
         
         if resultado_upload == 'SUCESSO':
             resultados_lojas['SUCESSO'].append(numero_formatado)
@@ -330,15 +365,21 @@ def processar_um_unico_arquivo(driver, wait, nome_arquivo, log_file):
             resultados_lojas['FALHA_MANUAL'].append(numero_formatado)
         elif resultado_upload == 'JA_EXISTE':
             resultados_lojas['JA_EXISTE'].append(numero_formatado)
+        elif resultado_upload == 'UPLOAD_NAO_CONFIRMADO':
+            resultados_lojas['UPLOAD_NAO_CONFIRMADO'].append(numero_formatado)
         else:
             resultados_lojas['FALHA_RECUPERAVEL'].append(numero_formatado)
     
     if os.path.exists(caminho_arquivo_preparado):
         os.remove(caminho_arquivo_preparado)
 
-    if resultados_lojas['FALHA_MANUAL']:
-        motivo = f"Lojas não encontradas: {', '.join(resultados_lojas['FALHA_MANUAL'])}"
-        return 'FALHA_MANUAL', motivo
+    if resultados_lojas['FALHA_MANUAL'] or resultados_lojas['UPLOAD_NAO_CONFIRMADO']:
+        motivos = []
+        if resultados_lojas['FALHA_MANUAL']:
+            motivos.append(f"Lojas não encontradas: {', '.join(resultados_lojas['FALHA_MANUAL'])}")
+        if resultados_lojas['UPLOAD_NAO_CONFIRMADO']:
+            motivos.append(f"Upload não confirmado após 3 tentativas: {', '.join(resultados_lojas['UPLOAD_NAO_CONFIRMADO'])}")
+        return 'FALHA_MANUAL', '; '.join(motivos)
     elif resultados_lojas['FALHA_RECUPERAVEL']:
         motivo = f"Falha de sistema nas lojas: {', '.join(resultados_lojas['FALHA_RECUPERAVEL'])}"
         return 'FALHA_RECUPERAVEL', motivo
