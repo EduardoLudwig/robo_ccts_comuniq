@@ -7,3 +7,9 @@ __pycache__/
 log_historico.txt
 
 ideias.txt
+/assets
+/learning-records
+/lessons
+/reference
+
+*.md

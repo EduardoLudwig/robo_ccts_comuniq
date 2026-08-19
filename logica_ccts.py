@@ -135,8 +135,8 @@ def fazer_login(driver, wait, usuario, senha):
         wait.until(EC.presence_of_element_located((By.XPATH, "//input[@formcontrolname='username']"))).send_keys(usuario)
         driver.find_element(By.XPATH, "//input[@formcontrolname='password']").send_keys(senha)
         driver.find_element(By.XPATH, "//button[contains(text(), 'Entrar')]").click()
+        wait.until(lambda d: '/login' not in d.current_url)
         print("Login realizado com sucesso.")
-        time.sleep(4)
         return True
     except Exception as e:
         print(f"Erro durante o login: {e}")
@@ -146,7 +146,6 @@ def navegar_para_acordos(driver, wait):
     try:
         driver.get(URL_WIKI)
         remuneracao_toggle = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[@aria-label='Toggle Remuneração CS']")))
-        time.sleep(2)
         remuneracao_toggle.click()
         print("Clicou no Toggle Remuneração CS")
         acordos_toggle = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[@aria-label='Toggle Acordos e Convenções Coletivas']")))
@@ -204,11 +203,13 @@ def abrir_edicao_da_loja(driver, wait, numero_loja_formatado):
 
     anexos = wait.until(EC.visibility_of_element_located((By.CSS_SELECTOR, "div.dz-clickable")))
     driver.execute_script("arguments[0].scrollIntoView(true);", anexos)
+
+    wait.until(lambda d: len(d.find_elements(By.XPATH, "//input[@type='file']")) >= 3)
     return 'OK'
 
 def obter_anexos_salvos(driver, wait, log_file):
 
-    timeout = 30; check_interval = 1; stable_checks_required = 3
+    timeout = 30; check_interval = 0.5; stable_checks_required = 2
     start_time = time.time(); last_count = -1; stable_counter = 0
     while time.time() - start_time < timeout:
         current_count = len(driver.find_elements(By.XPATH, "//a[normalize-space()='Remover Arquivo']"))
@@ -266,29 +267,37 @@ def upload_arquivo_para_loja(driver, wait, numero_loja_formatado, caminho_arquiv
 
         #
         try:
-            wait.until(lambda d: len(d.find_elements(By.XPATH, "//a[normalize-space()='Remover Arquivo']")) == contagem_antes + 1)
+            WebDriverWait(driver, 30).until(
+                lambda d: len(d.find_elements(By.XPATH, "//a[normalize-space()='Remover Arquivo']")) == contagem_antes + 1
+            )
         except TimeoutException:
-            raise Exception("Falha ao verificar o upload do anexo na interface.")
+            raise Exception("Falha ao verificar o upload do anexo na interface (timeout 30s).")
         #
         
         seletor_salvar = "//button[contains(normalize-space(.), 'Salvar') and contains(@class, 'btn-success')]"
-        todos_botoes_salvar = driver.find_elements(By.XPATH, seletor_salvar)
-        botoes_visiveis = [btn for btn in todos_botoes_salvar if btn.is_displayed() and btn.is_enabled()]
-        if not botoes_visiveis: raise Exception("Nenhum botão 'Salvar' visível encontrado.")
-        botao_salvar = botoes_visiveis[0]
+        botao_salvar = wait.until(EC.element_to_be_clickable((By.XPATH, seletor_salvar)))
         driver.execute_script("arguments[0].scrollIntoView(true);", botao_salvar)
-        time.sleep(1)
         botao_salvar.click()
         
-        time.sleep(3)
         wait.until(EC.element_to_be_clickable((By.XPATH, "//button[normalize-space(text())='Ações']")))
 
-        time.sleep(2)
-        anexos_pos_salvar = obter_anexos_salvos(driver, wait, log_file)
-        if not any(normalizar(a) == normalizar(nome_final_alvo) for a in anexos_pos_salvar):
-            log(f"[AVISO] '{nome_final_alvo}' não confirmado entre os anexos salvos da loja {numero_loja_formatado}.", log_file)
+        try:
+            WebDriverWait(driver, 20).until(
+                lambda d: any(
+                    normalizar((s.get_attribute('data-dz-name') or s.get_attribute('textContent') or '').strip()) == normalizar(nome_final_alvo)
+                    for s in d.find_elements(By.CSS_SELECTOR, "span[data-dz-name]")
+                )
+            )
+        except TimeoutException:
+            log(f"[AVISO] '{nome_final_alvo}' não confirmado de primeira na loja {numero_loja_formatado}; tentando reabrir e reconferir.", log_file)
             navegar_para_acordos(driver, wait)
-            return 'FALHA_VERIFICACAO'
+            if abrir_edicao_da_loja(driver, wait, numero_loja_formatado) == 'OK':
+                anexos_recheck = obter_anexos_salvos(driver, wait, log_file)
+                if not any(normalizar(a) == normalizar(nome_final_alvo) for a in anexos_recheck):
+                    navegar_para_acordos(driver, wait)
+                    return 'FALHA_VERIFICACAO'
+            else:
+                return 'FALHA_VERIFICACAO'
 
         if not navegar_para_acordos(driver, wait):
             raise Exception("Falha ao retornar para a seção de acordos após salvar.")
@@ -299,7 +308,7 @@ def upload_arquivo_para_loja(driver, wait, numero_loja_formatado, caminho_arquiv
     except Exception as e:
         log(f"[ERRO GERAL] Falha no upload de '{nome_arquivo_original}' para a loja {numero_loja_formatado}. Erro: {e}", log_file)
         driver.get(URL_WIKI)
-        time.sleep(5)
+        wait.until(EC.element_to_be_clickable((By.XPATH, "//button[@aria-label='Toggle Remuneração CS']")))
         navegar_para_acordos(driver, wait)
         return 'FALHA_RECUPERAVEL'
 
@@ -424,7 +433,7 @@ def processar_arquivos(diretorio_origem, pasta_temp, log_file_path, usuario, sen
             driver = inicializar_driver()
             if not driver: return []
 
-            wait = WebDriverWait(driver, 120)
+            wait = WebDriverWait(driver, 60)
 
             if not fazer_login(driver, wait, usuario, senha):
                 raise Exception("Falha no login.")
