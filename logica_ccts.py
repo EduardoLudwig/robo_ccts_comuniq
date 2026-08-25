@@ -12,6 +12,11 @@ from selenium.webdriver.support import expected_conditions as EC
 from webdriver_manager.chrome import ChromeDriverManager
 from selenium.common.exceptions import TimeoutException, ElementClickInterceptedException
 
+LOJAS_POR_REINICIO = 10
+
+class ReinicioProgramadoNecessario(Exception):
+    """Sinaliza que o driver deve ser reiniciado (reinício programado a cada N lojas)."""
+
 URL_LOGIN = "https://queroquero.mybeehome.com/login"
 URL_WIKI = "https://queroquero.mybeehome.com/wiki/492/detail"
 DIRETORIO_ORIGEM = ""
@@ -376,6 +381,30 @@ def upload_com_verificacao_e_retry(driver, wait, numero_loja_formatado, caminho_
     log(f"[ERRO] Falha confirmada após {max_tentativas} tentativas na loja {numero_loja_formatado}.", log_file)
     return 'UPLOAD_NAO_CONFIRMADO'
 
+def _reiniciar_sessao(driver, wait, usuario, senha, log_file):
+
+    try:
+        driver.quit()
+    except Exception:
+        pass
+
+    driver = inicializar_driver()
+    if not driver:
+        log("[ERRO] Falha ao reinicializar o driver.", log_file)
+        return None, None
+
+    wait = WebDriverWait(driver, 60)
+
+    if not fazer_login(driver, wait, usuario, senha):
+        log("[ERRO] Falha no login após reinicialização.", log_file)
+        return None, None
+
+    if not navegar_para_acordos(driver, wait):
+        log("[ERRO] Falha na navegação após reinicialização.", log_file)
+        return None, None
+
+    return driver, wait
+
 def processar_um_unico_arquivo(driver, wait, nome_arquivo, log_file, lojas_confirmadas=None):
     if lojas_confirmadas is None:
         lojas_confirmadas = {}
@@ -413,30 +442,43 @@ def processar_um_unico_arquivo(driver, wait, nome_arquivo, log_file, lojas_confi
     if not caminho_arquivo_preparado:
         return 'FALHA_MANUAL', "Erro ao preparar arquivo (verifique padrão da vigência)"
 
-    for numero in numeros_loja:
-        numero_formatado = numero.zfill(3)
+    contador_lojas = 0
+    try:
+        for numero in numeros_loja:
+            numero_formatado = numero.zfill(3)
 
-        if numero_formatado in lojas_confirmadas:
-            resultado_anterior = lojas_confirmadas[numero_formatado]
-            log(f"[PULO] Loja {numero_formatado} já confirmada ('{resultado_anterior}') nesta execução para '{nome_arquivo_completo}'; pulando reenvio.", log_file)
-            resultados_lojas[resultado_anterior].append(numero_formatado)
-            continue
+            if numero_formatado in lojas_confirmadas:
+                resultado_anterior = lojas_confirmadas[numero_formatado]
+                log(f"[PULO] Loja {numero_formatado} já confirmada ('{resultado_anterior}') nesta execução para '{nome_arquivo_completo}'; pulando reenvio.", log_file)
+                resultados_lojas[resultado_anterior].append(numero_formatado)
+                continue
 
-        resultado_upload = upload_com_verificacao_e_retry(driver, wait, numero_formatado, caminho_arquivo_preparado, log_file, nome_arquivo_completo)
+            resultado_upload = upload_com_verificacao_e_retry(driver, wait, numero_formatado, caminho_arquivo_preparado, log_file, nome_arquivo_completo)
 
-        if resultado_upload == 'SUCESSO':
-            lojas_confirmadas[numero_formatado] = 'SUCESSO'
-            resultados_lojas['SUCESSO'].append(numero_formatado)
-        elif resultado_upload == 'FALHA_LOJA_NAO_ENCONTRADA':
-            lojas_confirmadas[numero_formatado] = 'FALHA_MANUAL'
-            resultados_lojas['FALHA_MANUAL'].append(numero_formatado)
-        elif resultado_upload == 'JA_EXISTE':
-            lojas_confirmadas[numero_formatado] = 'JA_EXISTE'
-            resultados_lojas['JA_EXISTE'].append(numero_formatado)
-        elif resultado_upload == 'UPLOAD_NAO_CONFIRMADO':
-            resultados_lojas['UPLOAD_NAO_CONFIRMADO'].append(numero_formatado)
-        else:
-            resultados_lojas['FALHA_RECUPERAVEL'].append(numero_formatado)
+            if resultado_upload == 'SUCESSO':
+                lojas_confirmadas[numero_formatado] = 'SUCESSO'
+                resultados_lojas['SUCESSO'].append(numero_formatado)
+            elif resultado_upload == 'FALHA_LOJA_NAO_ENCONTRADA':
+                lojas_confirmadas[numero_formatado] = 'FALHA_MANUAL'
+                resultados_lojas['FALHA_MANUAL'].append(numero_formatado)
+            elif resultado_upload == 'JA_EXISTE':
+                lojas_confirmadas[numero_formatado] = 'JA_EXISTE'
+                resultados_lojas['JA_EXISTE'].append(numero_formatado)
+            elif resultado_upload == 'UPLOAD_NAO_CONFIRMADO':
+                resultados_lojas['UPLOAD_NAO_CONFIRMADO'].append(numero_formatado)
+            else:
+                resultados_lojas['FALHA_RECUPERAVEL'].append(numero_formatado)
+
+            contador_lojas += 1
+            if contador_lojas % LOJAS_POR_REINICIO == 0:
+                log(f"[INFO] {contador_lojas} lojas processadas neste arquivo. Reinício programado do driver...", log_file, espacamento=True)
+                raise ReinicioProgramadoNecessario
+    except ReinicioProgramadoNecessario:
+        # remove o temporário para que a próxima passada o recrie sem conflito
+        if os.path.exists(caminho_arquivo_preparado):
+            os.remove(caminho_arquivo_preparado)
+        raise
+    # --- FIM DA MUDANÇA 3 ---
     
     if os.path.exists(caminho_arquivo_preparado):
         os.remove(caminho_arquivo_preparado)
@@ -528,33 +570,34 @@ def processar_arquivos(diretorio_origem, pasta_temp, log_file_path, usuario, sen
                 caminho_original = os.path.join(diretorio_origem, nome_arquivo)
                 resultado, motivo = None, None
                
+                # --- INÍCIO DA MUDANÇA 4: Reinício programado fora do limite de sessões mortas ---
                 tentativas_sessao = 0
-                while tentativas_sessao < 2:
+                while True:
                     try:
                         resultado, motivo = processar_um_unico_arquivo(driver, wait, nome_arquivo, log_file, lojas_confirmadas_por_arquivo.setdefault(nome_arquivo, {}))
                         break
+                    except ReinicioProgramadoNecessario:
+                        log(f"[INFO] Executando reinício programado do driver para '{nome_arquivo}'...", log_file, espacamento=True)
+                        driver, wait = _reiniciar_sessao(driver, wait, usuario, senha, log_file)
+                        if not driver:
+                            log("[ERRO] Falha no reinício programado do driver.", log_file)
+                            resultado, motivo = 'FALHA_RECUPERAVEL', 'Falha ao reinicializar o driver (reinício programado)'
+                            break
+                        continue
                     except Exception as e:
                         if _sessao_morta(e):
                             tentativas_sessao += 1
                             log(f"[AVISO] Sessão do navegador encerrada ao processar '{nome_arquivo}' (tentativa {tentativas_sessao}/2). Reinicializando...", log_file)
-                            try:
-                                driver.quit()
-                            except Exception:
-                                pass
-                            driver = inicializar_driver()
+                            driver, wait = _reiniciar_sessao(driver, wait, usuario, senha, log_file)
                             if not driver:
-                                log("[ERRO] Falha ao reinicializar o driver.", log_file)
+                                resultado, motivo = 'FALHA_RECUPERAVEL', 'Erro de sessão durante o processamento'
                                 break
-                            wait = WebDriverWait(driver, 60)
-                            if not fazer_login(driver, wait, usuario, senha):
-                                log("[ERRO] Falha no login após reinicialização.", log_file)
-                                break
-                            if not navegar_para_acordos(driver, wait):
-                                log("[ERRO] Falha na navegação após reinicialização.", log_file)
-                                break
+                            continue
                         else:
                             log(f"[ERRO FATAL] Erro inesperado ao processar '{nome_arquivo}': {e}", log_file, espacamento=True)
+                            resultado, motivo = 'FALHA_RECUPERAVEL', f'Erro inesperado: {e}'
                             break
+                # --- FIM DA MUDANÇA 4 ---
                 if resultado is None:
                     resultado, motivo = 'FALHA_RECUPERAVEL', 'Erro de sessão/inesperado durante o processamento'
 
