@@ -62,6 +62,7 @@ def normalizar(nome):
     n = re.sub(r'\s*\(\d+\)\s*$', '', n)
     if n.endswith('.pdf'):
         n = n[:-4]
+    n = re.sub(r'[\s_-]+', '_', n)
     return n
 
 def renomear_e_preparar_arquivo(nome_real_com_prefixo, nome_limpo_para_processar, log_file):
@@ -208,31 +209,38 @@ def abrir_edicao_da_loja(driver, wait, numero_loja_formatado):
     return 'OK'
 
 def obter_anexos_salvos(driver, wait, log_file):
-
-    timeout = 30; check_interval = 0.5; stable_checks_required = 2
+    timeout = 30; check_interval = 0.5; stable_checks_required = 4
     start_time = time.time(); last_count = -1; stable_counter = 0
+    nomes_existentes = []
+
     while time.time() - start_time < timeout:
-        current_count = len(driver.find_elements(By.XPATH, "//a[normalize-space()='Remover Arquivo']"))
+        try:
+            spans = driver.find_elements(By.CSS_SELECTOR, "span[data-dz-name]")
+            nomes_existentes = [
+                (s.get_attribute('data-dz-name') or s.get_attribute('textContent') or '').strip()
+                for s in spans
+            ]
+            nomes_existentes = [n for n in nomes_existentes if n]
+            current_count = len(nomes_existentes)
+        except Exception:
+            current_count = -1
+            nomes_existentes = []
+
         if current_count == last_count:
             stable_counter += 1
         else:
             stable_counter = 0
-        if stable_counter >= stable_checks_required:
-            break
-        last_count = current_count; time.sleep(check_interval)
-    else:
-        log("[AVISO] Timeout! A lista de arquivos não estabilizou a tempo.", log_file)
 
-    nomes_existentes = []
-    try:
-        spans = driver.find_elements(By.CSS_SELECTOR, "span[data-dz-name]")
-        nomes_existentes = [
-            (s.get_attribute('data-dz-name') or s.get_attribute('textContent') or '').strip()
-            for s in spans
-        ]
-        nomes_existentes = [n for n in nomes_existentes if n]
-    except Exception:
-        pass
+        if stable_counter >= stable_checks_required and current_count > 0:
+            break
+
+        last_count = current_count
+        time.sleep(check_interval)
+    else:
+        log("[AVISO] Timeout! A lista de arquivos não carregou a tempo (continua com o que conseguiu ler).", log_file)
+
+    if nomes_existentes:
+        log(f"[DEBUG] Lista de anexos estabilizada com {len(nomes_existentes)} arquivos.", log_file)
     return nomes_existentes
 
 def upload_arquivo_para_loja(driver, wait, numero_loja_formatado, caminho_arquivo_completo, log_file, nome_arquivo_original):
@@ -251,7 +259,7 @@ def upload_arquivo_para_loja(driver, wait, numero_loja_formatado, caminho_arquiv
         nomes_existentes = obter_anexos_salvos(driver, wait, log_file)
         log(f"[DEBUG] Anexos na loja {numero_loja_formatado}: {nomes_existentes}", log_file)
 
-        contagem_antes = len(driver.find_elements(By.XPATH, "//a[normalize-space()='Remover Arquivo']"))
+        contagem_antes = len(nomes_existentes)
         log(f"[INFO] Contagem antes do upload para '{nome_arquivo_original}': {contagem_antes} arquivos.", log_file)
 
         if any(normalizar(ex) == normalizar(nome_final_alvo) for ex in nomes_existentes):
@@ -259,51 +267,89 @@ def upload_arquivo_para_loja(driver, wait, numero_loja_formatado, caminho_arquiv
             navegar_para_acordos(driver, wait)
             return 'JA_EXISTE'
         
-        #
         input_alvo.send_keys(caminho_arquivo_completo)
-        #
 
         log(f"[OK] Anexado '{nome_arquivo_original}' para a loja {numero_loja_formatado}.", log_file)
 
-        #
+        try:
+            total_inputs = len(driver.find_elements(By.XPATH, "//input[@type='file']"))
+            valor_input = input_alvo.get_attribute('value') or '(vazio)'
+            total_previews = len(driver.find_elements(By.CSS_SELECTOR, "div.dz-preview"))
+            log(f"[DEBUG] Inputs de arquivo na página: {total_inputs} | Value do input alvo: '{valor_input}' | Pré-visualizações no dropzone: {total_previews}", log_file)
+        except Exception as e:
+            log(f"[DEBUG] Falha ao inspecionar o dropzone após o envio ({type(e).__name__}).", log_file)
+        
         try:
             WebDriverWait(driver, 30).until(
-                lambda d: len(d.find_elements(By.XPATH, "//a[normalize-space()='Remover Arquivo']")) == contagem_antes + 1
-            )
-        except TimeoutException:
-            raise Exception("Falha ao verificar o upload do anexo na interface (timeout 30s).")
-        #
-        
-        seletor_salvar = "//button[contains(normalize-space(.), 'Salvar') and contains(@class, 'btn-success')]"
-        botao_salvar = wait.until(EC.element_to_be_clickable((By.XPATH, seletor_salvar)))
-        driver.execute_script("arguments[0].scrollIntoView(true);", botao_salvar)
-        botao_salvar.click()
-        
-        wait.until(EC.element_to_be_clickable((By.XPATH, "//button[normalize-space(text())='Ações']")))
-
-        try:
-            WebDriverWait(driver, 20).until(
                 lambda d: any(
-                    normalizar((s.get_attribute('data-dz-name') or s.get_attribute('textContent') or '').strip()) == normalizar(nome_final_alvo)
-                    for s in d.find_elements(By.CSS_SELECTOR, "span[data-dz-name]")
+                    'dz-complete' in (classes := (p.get_attribute('class') or ''))
+                    and 'dz-error' not in classes
+                    for p in d.find_elements(By.CSS_SELECTOR, "div.dz-preview")
+                    if any(
+                        normalizar((s.get_attribute('data-dz-name') or s.get_attribute('textContent') or '').strip()) == normalizar(nome_final_alvo)
+                        for s in p.find_elements(By.CSS_SELECTOR, "span[data-dz-name]")
+                    )
                 )
             )
         except TimeoutException:
-            log(f"[AVISO] '{nome_final_alvo}' não confirmado de primeira na loja {numero_loja_formatado}; tentando reabrir e reconferir.", log_file)
-            navegar_para_acordos(driver, wait)
-            if abrir_edicao_da_loja(driver, wait, numero_loja_formatado) == 'OK':
-                anexos_recheck = obter_anexos_salvos(driver, wait, log_file)
-                if not any(normalizar(a) == normalizar(nome_final_alvo) for a in anexos_recheck):
-                    navegar_para_acordos(driver, wait)
-                    return 'FALHA_VERIFICACAO'
-            else:
-                return 'FALHA_VERIFICACAO'
-
-        if not navegar_para_acordos(driver, wait):
-            raise Exception("Falha ao retornar para a seção de acordos após salvar.")
+            classes_previews = [
+                (p.get_attribute('class') or '')
+                for p in driver.find_elements(By.CSS_SELECTOR, "div.dz-preview")
+            ]
+            log(f"[ERRO] Upload de '{nome_final_alvo}' não concluiu no Dropzone (timeout 30s). Classes dos previews: {classes_previews}", log_file)
+            raise Exception("Upload do arquivo não concluído no Dropzone (timeout 30s).")
         
-        log(f"[SUCESSO CONFIRMADO] '{nome_final_alvo}' confirmado como salvo na loja {numero_loja_formatado}.", log_file, registrar_em_arquivo=False)
-        return 'SUCESSO'
+        log(f"[DEBUG] Upload de '{nome_final_alvo}' concluído (dz-success); procurando o botão Salvar.", log_file)
+
+        seletor_salvar = "//button[contains(normalize-space(.), 'Salvar') and contains(@class, 'btn-success')]"
+
+        def _botao_salvar_visivel():
+            botoes = [b for b in driver.find_elements(By.XPATH, seletor_salvar)
+                      if b.is_displayed() and b.is_enabled()]
+            return botoes[0] if botoes else None
+
+        botao_salvar = None
+        inicio_espera = time.time()
+        while time.time() - inicio_espera < 8:
+            botao_salvar = _botao_salvar_visivel()
+            if botao_salvar:
+                break
+            time.sleep(0.5)
+
+        if not botao_salvar:
+            todos_botoes = driver.find_elements(By.XPATH, seletor_salvar)
+            log(f"[AVISO] Nenhum botão 'Salvar' visível/habilitado em 8s. Total de botões 'Salvar' na página: {len(todos_botoes)}.", log_file)
+            for b in todos_botoes:
+                try:
+                    log(f"[DEBUG]   - 'Salvar' visível={b.is_displayed()} habilitado={b.is_enabled()}", log_file)
+                except Exception:
+                    pass
+            raise Exception("Nenhum botão 'Salvar' visível/habilitado encontrado (timeout 8s).")
+
+        driver.execute_script("arguments[0].scrollIntoView(true);", botao_salvar)
+        try:
+            botao_salvar.click()
+        except Exception:
+            log(f"[AVISO] Clique normal no botão Salvar bloqueado; tentando clicar via JavaScript.", log_file)
+            driver.execute_script("arguments[0].click();", botao_salvar)
+        log(f"[DEBUG] Botão Salvar clicado; aguardando retorno à tela de Ações.", log_file)
+
+        try:
+            WebDriverWait(driver, 15).until(EC.element_to_be_clickable((By.XPATH, "//button[normalize-space(text())='Ações']")))
+        except TimeoutException:
+            log(f"[AVISO] Botão 'Ações' não reapareceu em 15s na loja {numero_loja_formatado}; reabrindo a loja para conferir.", log_file)
+
+        navegar_para_acordos(driver, wait)
+        if abrir_edicao_da_loja(driver, wait, numero_loja_formatado) == 'OK':
+            anexos_salvos = obter_anexos_salvos(driver, wait, log_file)
+            if any(normalizar(a) == normalizar(nome_final_alvo) for a in anexos_salvos):
+                navegar_para_acordos(driver, wait)
+                log(f"[SUCESSO CONFIRMADO] '{nome_final_alvo}' confirmado como salvo na loja {numero_loja_formatado}.", log_file, registrar_em_arquivo=False)
+                return 'SUCESSO'
+            navegar_para_acordos(driver, wait)
+            return 'FALHA_VERIFICACAO'
+        else:
+            return 'FALHA_VERIFICACAO'
 
     except Exception as e:
         log(f"[ERRO GERAL] Falha no upload de '{nome_arquivo_original}' para a loja {numero_loja_formatado}. Erro: {e}", log_file)
@@ -330,7 +376,10 @@ def upload_com_verificacao_e_retry(driver, wait, numero_loja_formatado, caminho_
     log(f"[ERRO] Falha confirmada após {max_tentativas} tentativas na loja {numero_loja_formatado}.", log_file)
     return 'UPLOAD_NAO_CONFIRMADO'
 
-def processar_um_unico_arquivo(driver, wait, nome_arquivo, log_file):
+def processar_um_unico_arquivo(driver, wait, nome_arquivo, log_file, lojas_confirmadas=None):
+    if lojas_confirmadas is None:
+        lojas_confirmadas = {}
+
     nome_arquivo_completo = nome_arquivo
     
     nome_arquivo_limpo = nome_arquivo
@@ -366,13 +415,23 @@ def processar_um_unico_arquivo(driver, wait, nome_arquivo, log_file):
 
     for numero in numeros_loja:
         numero_formatado = numero.zfill(3)
+
+        if numero_formatado in lojas_confirmadas:
+            resultado_anterior = lojas_confirmadas[numero_formatado]
+            log(f"[PULO] Loja {numero_formatado} já confirmada ('{resultado_anterior}') nesta execução para '{nome_arquivo_completo}'; pulando reenvio.", log_file)
+            resultados_lojas[resultado_anterior].append(numero_formatado)
+            continue
+
         resultado_upload = upload_com_verificacao_e_retry(driver, wait, numero_formatado, caminho_arquivo_preparado, log_file, nome_arquivo_completo)
-        
+
         if resultado_upload == 'SUCESSO':
+            lojas_confirmadas[numero_formatado] = 'SUCESSO'
             resultados_lojas['SUCESSO'].append(numero_formatado)
         elif resultado_upload == 'FALHA_LOJA_NAO_ENCONTRADA':
+            lojas_confirmadas[numero_formatado] = 'FALHA_MANUAL'
             resultados_lojas['FALHA_MANUAL'].append(numero_formatado)
         elif resultado_upload == 'JA_EXISTE':
+            lojas_confirmadas[numero_formatado] = 'JA_EXISTE'
             resultados_lojas['JA_EXISTE'].append(numero_formatado)
         elif resultado_upload == 'UPLOAD_NAO_CONFIRMADO':
             resultados_lojas['UPLOAD_NAO_CONFIRMADO'].append(numero_formatado)
@@ -400,6 +459,20 @@ def processar_um_unico_arquivo(driver, wait, nome_arquivo, log_file):
 
     else:
         return 'SUCESSO', "Todas as lojas processadas com sucesso"
+
+def _sessao_morta(erro):
+    texto = str(erro).lower()
+    termos = [
+        'invalid session id',
+        'connection aborted',
+        'max retries exceeded',
+        'failed to establish a new connection',
+        'connectionreseterror',
+        '10061',
+        'no such window',
+        'target frame detached',
+    ]
+    return any(termo in texto for termo in termos)
 
 def processar_arquivos(diretorio_origem, pasta_temp, log_file_path, usuario, senha, parar_event=None):
     if os.path.exists(log_file_path): os.remove(log_file_path)
@@ -445,13 +518,45 @@ def processar_arquivos(diretorio_origem, pasta_temp, log_file_path, usuario, sen
             arquivos_para_processar = [f for f in os.listdir(diretorio_origem) if os.path.isfile(os.path.join(diretorio_origem, f)) and os.path.splitext(f)[1].lower() in extensoes_permitidas]
 
             log(f"Encontrados {len(arquivos_para_processar)} arquivos para processar em '{diretorio_origem}'.", log_file)
-            
+
+            lojas_confirmadas_por_arquivo = {}
+
             for nome_arquivo in arquivos_para_processar:
                 if parar_event and parar_event.is_set():
                     log("[INTERRUPÇÃO] Processo interrompido.", log_file); break
                 
                 caminho_original = os.path.join(diretorio_origem, nome_arquivo)
-                resultado, motivo = processar_um_unico_arquivo(driver, wait, nome_arquivo, log_file)
+                resultado, motivo = None, None
+               
+                tentativas_sessao = 0
+                while tentativas_sessao < 2:
+                    try:
+                        resultado, motivo = processar_um_unico_arquivo(driver, wait, nome_arquivo, log_file, lojas_confirmadas_por_arquivo.setdefault(nome_arquivo, {}))
+                        break
+                    except Exception as e:
+                        if _sessao_morta(e):
+                            tentativas_sessao += 1
+                            log(f"[AVISO] Sessão do navegador encerrada ao processar '{nome_arquivo}' (tentativa {tentativas_sessao}/2). Reinicializando...", log_file)
+                            try:
+                                driver.quit()
+                            except Exception:
+                                pass
+                            driver = inicializar_driver()
+                            if not driver:
+                                log("[ERRO] Falha ao reinicializar o driver.", log_file)
+                                break
+                            wait = WebDriverWait(driver, 60)
+                            if not fazer_login(driver, wait, usuario, senha):
+                                log("[ERRO] Falha no login após reinicialização.", log_file)
+                                break
+                            if not navegar_para_acordos(driver, wait):
+                                log("[ERRO] Falha na navegação após reinicialização.", log_file)
+                                break
+                        else:
+                            log(f"[ERRO FATAL] Erro inesperado ao processar '{nome_arquivo}': {e}", log_file, espacamento=True)
+                            break
+                if resultado is None:
+                    resultado, motivo = 'FALHA_RECUPERAVEL', 'Erro de sessão/inesperado durante o processamento'
 
                 if resultado == 'SUCESSO':
                     mover_e_renomear_arquivo(caminho_original, pasta_feitos, "[FEITO]", log_file)
