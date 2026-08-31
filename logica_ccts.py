@@ -1,6 +1,7 @@
 import time
 import os
 import re
+import json
 import shutil
 import win32com.client
 from datetime import datetime
@@ -19,6 +20,7 @@ class ReinicioProgramadoNecessario(Exception):
 
 URL_LOGIN = "https://queroquero.mybeehome.com/login"
 URL_WIKI = "https://queroquero.mybeehome.com/wiki/492/detail"
+SECAO_ACORDOS = "Acordos e Convenções Coletivas"
 DIRETORIO_ORIGEM = ""
 PASTA_TEMP = ""
 LOG_FILE_PATH = ""
@@ -61,6 +63,137 @@ def converter_doc_para_pdf(caminho_arquivo, diretorio_saida, log_file):
 def extrair_numeros_loja(nome_arquivo):
     primeira_parte = nome_arquivo.split('_')[0]
     return re.findall(r'\b\d{1,3}\b', primeira_parte)
+
+def carregar_flag_criar_loja():
+    """Lê do config.json se a criação automática de loja está habilitada."""
+    try:
+        caminho_config = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+        with open(caminho_config, 'r', encoding='utf-8') as f:
+            return bool(json.load(f).get("criar_loja_automaticamente", False))
+    except Exception:
+        return False
+
+def extrair_cidade_loja(nome_arquivo_limpo):
+    """Extrai a cidade do nome do arquivo (2º token separado por '_'). Ex.: '690_LAJEADO_SIND0088_2026' -> 'LAJEADO'."""
+    partes = nome_arquivo_limpo.split('_')
+    return partes[1] if len(partes) > 1 and partes[1] else None
+
+def montar_nome_loja(numero_formatado, cidade):
+    """Monta o nome usado na criação da página. Ex.: '690 - LAJEADO' (ou apenas '690' se não houver cidade)."""
+    return f"{numero_formatado} - {cidade}" if cidade else numero_formatado
+
+def _fechar_popup_onesignal(driver, timeout=3):
+    try:
+        popup_wait = WebDriverWait(driver, timeout)
+        popup_wait.until(EC.element_to_be_clickable((By.XPATH, "//button[@id='onesignal-slidedown-cancel-button']"))).click()
+    except TimeoutException:
+        pass
+
+# navegação por cliques até a página de categorias de Acordos 
+def navegar_para_categoria_acordos(driver, wait, log_file):
+    """Navega até a página de categorias de 'Acordos e Convenções Coletivas' usando apenas cliques."""
+    log("[CRIACAO] Navegando até a página de categorias de Acordos...", log_file)
+
+    # Sidebar → "Biblioteca do Conhecimento"
+    link_biblioteca = wait.until(EC.presence_of_element_located(
+        (By.XPATH, "//a[@href='/wiki']//span[normalize-space(.)='Biblioteca do Conhecimento']/ancestor::a")
+    ))
+    driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", link_biblioteca)
+    time.sleep(1)
+    link_biblioteca.click()
+    log("[CRIACAO] Passo 1/5: Clicou em 'Biblioteca do Conhecimento'.", log_file)
+
+    # Clica em "Ver mais" (pelo texto exato do link)
+    time.sleep(3)
+    botao_ver_mais = wait.until(EC.presence_of_element_located(
+        (By.XPATH, "//a[normalize-space(.)='Ver mais']")
+    ))
+    driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", botao_ver_mais)
+    time.sleep(1)
+    driver.execute_script("arguments[0].click();", botao_ver_mais)
+    log("[CRIACAO] Passo 2/5: Clicou em 'Ver mais'.", log_file)
+
+    # Clica no h6 "Remuneração (C&S)" que direciona para a página /wiki/130/category
+    time.sleep(3)
+    texto_remuneracao = wait.until(EC.presence_of_element_located(
+        (By.XPATH, "//h6[normalize-space(.)='Remuneração (C&S)']")
+    ))
+    driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", texto_remuneracao)
+    time.sleep(1)
+    driver.execute_script("arguments[0].click();", texto_remuneracao)
+    log("[CRIACAO] Passo 3/5: Clicou em 'Remuneração (C&S)'.", log_file)
+
+    # Toggle "Remuneração CS" na página de categoria
+    toggle_remuneracao = wait.until(EC.element_to_be_clickable(
+        (By.XPATH, "//button[@aria-label='Toggle Remuneração CS']")
+    ))
+    driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", toggle_remuneracao)
+    toggle_remuneracao.click()
+    log("[CRIACAO] Passo 4/5: Expandiu toggle 'Remuneração CS'.", log_file)
+
+    # Toggle "Acordos e Convenções Coletivas"
+    toggle_acordos = wait.until(EC.element_to_be_clickable(
+        (By.XPATH, "//button[@aria-label='Toggle Acordos e Convenções Coletivas']")
+    ))
+    driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", toggle_acordos)
+    toggle_acordos.click()
+    log("[CRIACAO] Passo 5/5: Expandiu toggle 'Acordos e Convenções Coletivas'.", log_file)
+
+    return True
+
+
+def criar_loja_no_comuniq(driver, wait, nome_loja, log_file):
+    """Cria a página da loja no ComuniQ (modelo 'Em branco') preenchendo título, descrição e texto com o mesmo valor."""
+    try:
+        log(f"[CRIACAO] Loja inexistente — criando página '{nome_loja}' no ComuniQ...", log_file)
+       
+        if not navegar_para_categoria_acordos(driver, wait, log_file):
+            return 'FALHA_CRIACAO_LOJA'
+
+        seletor_criar_acordos = (
+            "//span[contains(@class,'mdc-button__label') and normalize-space(.)='" + SECAO_ACORDOS + "']"
+            "/ancestor::div[contains(@class,'full-width')][1]"
+            "/following-sibling::a[contains(@class,'btn-link')][1]"
+        )
+        wait.until(EC.visibility_of_element_located((By.XPATH, f"//span[contains(@class,'mdc-button__label') and normalize-space(.)='{SECAO_ACORDOS}']")))
+        botao_criar = wait.until(EC.element_to_be_clickable((By.XPATH, seletor_criar_acordos)))
+        driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", botao_criar)
+        time.sleep(3)
+        botao_criar.click()
+        log("[CRIACAO] Clicou no botão '+' (criar página) da seção de Acordos.", log_file)
+
+        wait.until(EC.visibility_of_element_located((By.XPATH, "//h5[normalize-space()='Escolha o modelo da página']")))
+        wait.until(EC.element_to_be_clickable((By.XPATH, "//h5[normalize-space()='Em branco']/ancestor::div[contains(@class,'card')][1]//button"))).click()
+
+        campo_titulo = wait.until(EC.visibility_of_element_located((By.XPATH, "//input[@formcontrolname='title']")))
+        campo_titulo.clear(); campo_titulo.send_keys(nome_loja)
+
+        campo_descricao = wait.until(EC.visibility_of_element_located((By.XPATH, "//input[@formcontrolname='description']")))
+        campo_descricao.clear(); campo_descricao.send_keys(nome_loja)
+
+        campo_texto = wait.until(EC.element_to_be_clickable((By.XPATH, "//div[contains(@class,'fr-element') and @contenteditable='true']")))
+        campo_texto.click(); campo_texto.send_keys(nome_loja)
+
+        botao_salvar = wait.until(EC.element_to_be_clickable((By.XPATH, "//div[contains(@class,'footer-bar')]//button[contains(@class,'btn-success')]")))
+        driver.execute_script("arguments[0].scrollIntoView(true);", botao_salvar)
+        botao_salvar.click()
+        log(f"[DEBUG] Página '{nome_loja}' salva; aguardando aparecimento na lista de acordos...", log_file)
+
+        if not navegar_para_acordos(driver, wait):
+            return 'FALHA_CRIACAO_LOJA'
+
+        confirmacao_xpath = f"//span[contains(@class, 'mdc-button__label') and contains(normalize-space(.), '{nome_loja}')]"
+        try:
+            WebDriverWait(driver, 30).until(EC.presence_of_element_located((By.XPATH, confirmacao_xpath)))
+        except TimeoutException:
+            log(f"[ERRO] Página '{nome_loja}' salva, mas o botão da loja não apareceu na lista de acordos.", log_file)
+            return 'FALHA_CRIACAO_LOJA'
+
+        log(f"[SUCESSO] Página da loja '{nome_loja}' criada no ComuniQ.", log_file)
+        return 'OK'
+    except Exception as e:
+        log(f"[ERRO] Falha ao criar a loja '{nome_loja}'. Erro: {e}", log_file)
+        return 'FALHA_CRIACAO_LOJA'
 
 def normalizar(nome):
     n = nome.strip().lower()
@@ -188,14 +321,32 @@ def mover_e_renomear_arquivo(caminho_arquivo_original, pasta_destino, sufixo_tag
     except Exception as e:
         log(f"[ERRO] Falha ao mover/renomear o arquivo {caminho_arquivo_original}. Erro: {e}", log_file)
 
-def abrir_edicao_da_loja(driver, wait, numero_loja_formatado):
+def abrir_edicao_da_loja(driver, wait, numero_loja_formatado, nome_loja=None, log_file=None):
     try:
         loja_xpath = f"//span[contains(@class, 'mdc-button__label') and starts-with(normalize-space(.), '{numero_loja_formatado}')]"
         elemento_loja = wait.until(EC.element_to_be_clickable((By.XPATH, loja_xpath)))
         driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", elemento_loja)
         elemento_loja.click()
     except TimeoutException:
-        return 'LOJA_NAO_ENCONTRADA'
+        if not (carregar_flag_criar_loja() and nome_loja and log_file):
+            return 'LOJA_NAO_ENCONTRADA'
+
+        loja_xpath_ampla = f"//span[contains(@class, 'mdc-button__label') and contains(normalize-space(.), '{numero_loja_formatado}')]"
+        try:
+            elemento_loja = WebDriverWait(driver, 8).until(EC.element_to_be_clickable((By.XPATH, loja_xpath_ampla)))
+            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", elemento_loja)
+            elemento_loja.click()
+        except TimeoutException:
+            if criar_loja_no_comuniq(driver, wait, nome_loja, log_file) != 'OK':
+                return 'FALHA_CRIACAO_LOJA'
+            try:
+                loja_xpath_nova = f"//span[contains(@class, 'mdc-button__label') and contains(normalize-space(.), '{nome_loja}')]"
+                elemento_loja = WebDriverWait(driver, 15).until(EC.element_to_be_clickable((By.XPATH, loja_xpath_nova)))
+                driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", elemento_loja)
+                elemento_loja.click()
+            except TimeoutException:
+                log(f"[ERRO] Loja '{nome_loja}' criada, mas o botão não ficou clicável.", log_file)
+                return 'FALHA_CRIACAO_LOJA'
 
     try:
         popup_wait = WebDriverWait(driver, 3)
@@ -248,15 +399,18 @@ def obter_anexos_salvos(driver, wait, log_file):
         log(f"[DEBUG] Lista de anexos estabilizada com {len(nomes_existentes)} arquivos.", log_file)
     return nomes_existentes
 
-def upload_arquivo_para_loja(driver, wait, numero_loja_formatado, caminho_arquivo_completo, log_file, nome_arquivo_original):
+def upload_arquivo_para_loja(driver, wait, numero_loja_formatado, caminho_arquivo_completo, log_file, nome_arquivo_original, nome_loja=None):
     try:
         log(f"--- Iniciando upload de '{nome_arquivo_original}' para a loja {numero_loja_formatado} ---", log_file, registrar_em_arquivo=False)
         
-        status_loja = abrir_edicao_da_loja(driver, wait, numero_loja_formatado)
+        status_loja = abrir_edicao_da_loja(driver, wait, numero_loja_formatado, nome_loja, log_file)
         if status_loja == 'LOJA_NAO_ENCONTRADA':
             log(f"[ERRO MANUAL] Loja {numero_loja_formatado} não encontrada para o arquivo '{nome_arquivo_original}'.", log_file)
             return 'FALHA_LOJA_NAO_ENCONTRADA'
-
+        if status_loja == 'FALHA_CRIACAO_LOJA':
+            log(f"[ERRO MANUAL] Falha ao criar a loja {numero_loja_formatado} ('{nome_loja}') no ComuniQ para o arquivo '{nome_arquivo_original}'.", log_file)
+            return 'FALHA_CRIACAO_LOJA'
+        
         input_alvo = wait.until(EC.presence_of_all_elements_located((By.XPATH, "//input[@type='file']")))[2]
 
         nome_final_alvo = os.path.basename(caminho_arquivo_completo)
@@ -345,7 +499,7 @@ def upload_arquivo_para_loja(driver, wait, numero_loja_formatado, caminho_arquiv
             log(f"[AVISO] Botão 'Ações' não reapareceu em 15s na loja {numero_loja_formatado}; reabrindo a loja para conferir.", log_file)
 
         navegar_para_acordos(driver, wait)
-        if abrir_edicao_da_loja(driver, wait, numero_loja_formatado) == 'OK':
+        if abrir_edicao_da_loja(driver, wait, numero_loja_formatado, nome_loja, log_file) == 'OK':
             anexos_salvos = obter_anexos_salvos(driver, wait, log_file)
             if any(normalizar(a) == normalizar(nome_final_alvo) for a in anexos_salvos):
                 navegar_para_acordos(driver, wait)
@@ -363,15 +517,15 @@ def upload_arquivo_para_loja(driver, wait, numero_loja_formatado, caminho_arquiv
         navegar_para_acordos(driver, wait)
         return 'FALHA_RECUPERAVEL'
 
-def upload_com_verificacao_e_retry(driver, wait, numero_loja_formatado, caminho_arquivo_completo, log_file, nome_arquivo_original):
+def upload_com_verificacao_e_retry(driver, wait, numero_loja_formatado, caminho_arquivo_completo, log_file, nome_arquivo_original, nome_loja=None):
     max_tentativas = 3
     for tentativa in range(1, max_tentativas + 1):
-        resultado = upload_arquivo_para_loja(driver, wait, numero_loja_formatado, caminho_arquivo_completo, log_file, nome_arquivo_original)
+        resultado = upload_arquivo_para_loja(driver, wait, numero_loja_formatado, caminho_arquivo_completo, log_file, nome_arquivo_original, nome_loja)
 
         if resultado == 'JA_EXISTE' and tentativa > 1:
             log(f"[SUCESSO CONFIRMADO] '{nome_arquivo_original}' confirmado na loja {numero_loja_formatado} via retry.", log_file)
             return 'SUCESSO'
-        if resultado in ('SUCESSO', 'JA_EXISTE', 'FALHA_LOJA_NAO_ENCONTRADA'):
+        if resultado in ('SUCESSO', 'JA_EXISTE', 'FALHA_LOJA_NAO_ENCONTRADA', 'FALHA_CRIACAO_LOJA'):
             return resultado
 
         log(f"[AVISO] Tentativa {tentativa}/{max_tentativas} falhou ({resultado}) para loja {numero_loja_formatado}.", log_file)
@@ -432,7 +586,7 @@ def processar_um_unico_arquivo(driver, wait, nome_arquivo, log_file, lojas_confi
     if nome_arquivo_completo != nome_arquivo_limpo:
         log(f"(Nome limpo para processamento: {nome_arquivo_limpo})", log_file)
 
-    resultados_lojas = {'SUCESSO': [], 'JA_EXISTE': [], 'FALHA_MANUAL': [], 'UPLOAD_NAO_CONFIRMADO': [], 'FALHA_RECUPERAVEL': []}
+    resultados_lojas = {'SUCESSO': [], 'JA_EXISTE': [], 'FALHA_MANUAL': [], 'UPLOAD_NAO_CONFIRMADO': [], 'FALHA_RECUPERAVEL': [], 'FALHA_CRIACAO': []}
 
     numeros_loja = extrair_numeros_loja(nome_arquivo_limpo)
     if not numeros_loja:
@@ -442,10 +596,14 @@ def processar_um_unico_arquivo(driver, wait, nome_arquivo, log_file, lojas_confi
     if not caminho_arquivo_preparado:
         return 'FALHA_MANUAL', "Erro ao preparar arquivo (verifique padrão da vigência)"
 
+    cidade_loja = extrair_cidade_loja(nome_arquivo_limpo)
+
     contador_lojas = 0
     try:
         for numero in numeros_loja:
             numero_formatado = numero.zfill(3)
+
+            nome_loja = montar_nome_loja(numero_formatado, cidade_loja)
 
             if numero_formatado in lojas_confirmadas:
                 resultado_anterior = lojas_confirmadas[numero_formatado]
@@ -453,7 +611,7 @@ def processar_um_unico_arquivo(driver, wait, nome_arquivo, log_file, lojas_confi
                 resultados_lojas[resultado_anterior].append(numero_formatado)
                 continue
 
-            resultado_upload = upload_com_verificacao_e_retry(driver, wait, numero_formatado, caminho_arquivo_preparado, log_file, nome_arquivo_completo)
+            resultado_upload = upload_com_verificacao_e_retry(driver, wait, numero_formatado, caminho_arquivo_preparado, log_file, nome_arquivo_completo, nome_loja)
 
             if resultado_upload == 'SUCESSO':
                 lojas_confirmadas[numero_formatado] = 'SUCESSO'
@@ -461,6 +619,9 @@ def processar_um_unico_arquivo(driver, wait, nome_arquivo, log_file, lojas_confi
             elif resultado_upload == 'FALHA_LOJA_NAO_ENCONTRADA':
                 lojas_confirmadas[numero_formatado] = 'FALHA_MANUAL'
                 resultados_lojas['FALHA_MANUAL'].append(numero_formatado)
+            elif resultado_upload == 'FALHA_CRIACAO_LOJA':
+                lojas_confirmadas[numero_formatado] = 'FALHA_CRIACAO_LOJA'
+                resultados_lojas['FALHA_CRIACAO'].append(numero_formatado)
             elif resultado_upload == 'JA_EXISTE':
                 lojas_confirmadas[numero_formatado] = 'JA_EXISTE'
                 resultados_lojas['JA_EXISTE'].append(numero_formatado)
@@ -474,19 +635,19 @@ def processar_um_unico_arquivo(driver, wait, nome_arquivo, log_file, lojas_confi
                 log(f"[INFO] {contador_lojas} lojas processadas neste arquivo. Reinício programado do driver...", log_file, espacamento=True)
                 raise ReinicioProgramadoNecessario
     except ReinicioProgramadoNecessario:
-        # remove o temporário para que a próxima passada o recrie sem conflito
         if os.path.exists(caminho_arquivo_preparado):
             os.remove(caminho_arquivo_preparado)
         raise
-    # --- FIM DA MUDANÇA 3 ---
     
     if os.path.exists(caminho_arquivo_preparado):
         os.remove(caminho_arquivo_preparado)
 
-    if resultados_lojas['FALHA_MANUAL'] or resultados_lojas['UPLOAD_NAO_CONFIRMADO']:
+    if resultados_lojas['FALHA_MANUAL'] or resultados_lojas['UPLOAD_NAO_CONFIRMADO'] or resultados_lojas['FALHA_CRIACAO']:
         motivos = []
         if resultados_lojas['FALHA_MANUAL']:
             motivos.append(f"Lojas não encontradas: {', '.join(resultados_lojas['FALHA_MANUAL'])}")
+        if resultados_lojas['FALHA_CRIACAO']:
+            motivos.append(f"Falha ao criar lojas no ComuniQ: {', '.join(resultados_lojas['FALHA_CRIACAO'])}")
         if resultados_lojas['UPLOAD_NAO_CONFIRMADO']:
             motivos.append(f"Upload não confirmado após 3 tentativas: {', '.join(resultados_lojas['UPLOAD_NAO_CONFIRMADO'])}")
         return 'FALHA_MANUAL', '; '.join(motivos)
@@ -570,7 +731,6 @@ def processar_arquivos(diretorio_origem, pasta_temp, log_file_path, usuario, sen
                 caminho_original = os.path.join(diretorio_origem, nome_arquivo)
                 resultado, motivo = None, None
                
-                # --- INÍCIO DA MUDANÇA 4: Reinício programado fora do limite de sessões mortas ---
                 tentativas_sessao = 0
                 while True:
                     try:
@@ -596,8 +756,7 @@ def processar_arquivos(diretorio_origem, pasta_temp, log_file_path, usuario, sen
                         else:
                             log(f"[ERRO FATAL] Erro inesperado ao processar '{nome_arquivo}': {e}", log_file, espacamento=True)
                             resultado, motivo = 'FALHA_RECUPERAVEL', f'Erro inesperado: {e}'
-                            break
-                # --- FIM DA MUDANÇA 4 ---
+                            break 
                 if resultado is None:
                     resultado, motivo = 'FALHA_RECUPERAVEL', 'Erro de sessão/inesperado durante o processamento'
 

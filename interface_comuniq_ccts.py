@@ -101,7 +101,14 @@ class App:
 
     def gravar_credenciais(self):
         try:
-            config = { "usuario": self.usuario, "senha": self.senha }
+            config = {}
+            try:
+                with open(self.config_file, 'r', encoding='utf-8') as f:
+                    config = json.load(f)
+            except (FileNotFoundError, json.JSONDecodeError):
+                pass
+            config["usuario"] = self.usuario
+            config["senha"] = self.senha
             with open(self.config_file, 'w', encoding='utf-8') as f:
                 json.dump(config, f, indent=4)
         except Exception as e:
