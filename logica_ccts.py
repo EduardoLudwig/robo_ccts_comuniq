@@ -11,7 +11,7 @@ from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from webdriver_manager.chrome import ChromeDriverManager
-from selenium.common.exceptions import TimeoutException, ElementClickInterceptedException
+from selenium.common.exceptions import TimeoutException
 
 LOJAS_POR_REINICIO = 10
 
@@ -65,7 +65,6 @@ def extrair_numeros_loja(nome_arquivo):
     return re.findall(r'\b\d{1,3}\b', primeira_parte)
 
 def carregar_flag_criar_loja():
-    """Lê do config.json se a criação automática de loja está habilitada."""
     try:
         caminho_config = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
         with open(caminho_config, 'r', encoding='utf-8') as f:
@@ -74,24 +73,14 @@ def carregar_flag_criar_loja():
         return False
 
 def extrair_cidade_loja(nome_arquivo_limpo):
-    """Extrai a cidade do nome do arquivo (2º token separado por '_'). Ex.: '690_LAJEADO_SIND0088_2026' -> 'LAJEADO'."""
     partes = nome_arquivo_limpo.split('_')
     return partes[1] if len(partes) > 1 and partes[1] else None
 
 def montar_nome_loja(numero_formatado, cidade):
-    """Monta o nome usado na criação da página. Ex.: '690 - LAJEADO' (ou apenas '690' se não houver cidade)."""
     return f"{numero_formatado} - {cidade}" if cidade else numero_formatado
-
-def _fechar_popup_onesignal(driver, timeout=3):
-    try:
-        popup_wait = WebDriverWait(driver, timeout)
-        popup_wait.until(EC.element_to_be_clickable((By.XPATH, "//button[@id='onesignal-slidedown-cancel-button']"))).click()
-    except TimeoutException:
-        pass
 
 # navegação por cliques até a página de categorias de Acordos 
 def navegar_para_categoria_acordos(driver, wait, log_file):
-    """Navega até a página de categorias de 'Acordos e Convenções Coletivas' usando apenas cliques."""
     log("[CRIACAO] Navegando até a página de categorias de Acordos...", log_file)
 
     # Sidebar → "Biblioteca do Conhecimento"
@@ -99,27 +88,22 @@ def navegar_para_categoria_acordos(driver, wait, log_file):
         (By.XPATH, "//a[@href='/wiki']//span[normalize-space(.)='Biblioteca do Conhecimento']/ancestor::a")
     ))
     driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", link_biblioteca)
-    time.sleep(1)
     link_biblioteca.click()
     log("[CRIACAO] Passo 1/5: Clicou em 'Biblioteca do Conhecimento'.", log_file)
 
     # Clica em "Ver mais" (pelo texto exato do link)
-    time.sleep(3)
     botao_ver_mais = wait.until(EC.presence_of_element_located(
         (By.XPATH, "//a[normalize-space(.)='Ver mais']")
     ))
     driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", botao_ver_mais)
-    time.sleep(1)
     driver.execute_script("arguments[0].click();", botao_ver_mais)
     log("[CRIACAO] Passo 2/5: Clicou em 'Ver mais'.", log_file)
 
     # Clica no h6 "Remuneração (C&S)" que direciona para a página /wiki/130/category
-    time.sleep(3)
     texto_remuneracao = wait.until(EC.presence_of_element_located(
         (By.XPATH, "//h6[normalize-space(.)='Remuneração (C&S)']")
     ))
     driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", texto_remuneracao)
-    time.sleep(1)
     driver.execute_script("arguments[0].click();", texto_remuneracao)
     log("[CRIACAO] Passo 3/5: Clicou em 'Remuneração (C&S)'.", log_file)
 
@@ -143,7 +127,6 @@ def navegar_para_categoria_acordos(driver, wait, log_file):
 
 
 def criar_loja_no_comuniq(driver, wait, nome_loja, log_file):
-    """Cria a página da loja no ComuniQ (modelo 'Em branco') preenchendo título, descrição e texto com o mesmo valor."""
     try:
         log(f"[CRIACAO] Loja inexistente — criando página '{nome_loja}' no ComuniQ...", log_file)
        
@@ -158,7 +141,6 @@ def criar_loja_no_comuniq(driver, wait, nome_loja, log_file):
         wait.until(EC.visibility_of_element_located((By.XPATH, f"//span[contains(@class,'mdc-button__label') and normalize-space(.)='{SECAO_ACORDOS}']")))
         botao_criar = wait.until(EC.element_to_be_clickable((By.XPATH, seletor_criar_acordos)))
         driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", botao_criar)
-        time.sleep(3)
         botao_criar.click()
         log("[CRIACAO] Clicou no botão '+' (criar página) da seção de Acordos.", log_file)
 
@@ -203,8 +185,8 @@ def normalizar(nome):
     n = re.sub(r'[\s_-]+', '_', n)
     return n
 
-def renomear_e_preparar_arquivo(nome_real_com_prefixo, nome_limpo_para_processar, log_file):
-    caminho_origem_completo = os.path.join(DIRETORIO_ORIGEM, nome_real_com_prefixo)
+def renomear_e_preparar_arquivo(nome_real_com_prefixo, nome_limpo_para_processar, log_file, diretorio_override=None):
+    caminho_origem_completo = os.path.join(diretorio_override or DIRETORIO_ORIGEM, nome_real_com_prefixo)  # [MUDANÇA - Reorganização de pastas]
     
     nome_sem_extensao, extensao = os.path.splitext(nome_limpo_para_processar)
     caminho_para_upload = caminho_origem_completo
@@ -300,23 +282,16 @@ def navegar_para_acordos(driver, wait):
 def mover_e_renomear_arquivo(caminho_arquivo_original, pasta_destino, sufixo_tag, log_file):
     try:
         nome_base_arquivo = os.path.basename(caminho_arquivo_original)
+        nome_sem_ext, extensao = os.path.splitext(nome_base_arquivo)
 
-        nome_limpo = nome_base_arquivo
-        if nome_limpo.startswith("[FEITO]_"):
-            nome_limpo = nome_limpo[len("[FEITO]_"):]
-        elif nome_limpo.startswith("[FALHA_MANUAL]_"):
-            nome_limpo = nome_limpo[len("[FALHA_MANUAL]_"):]
-        elif nome_limpo.startswith("[JA_EXISTE]_"):
-            nome_limpo = nome_limpo[len("[JA_EXISTE]_"):]
-        
-        nome_base, extensao = os.path.splitext(nome_limpo)
-        
-        novo_nome = f"{nome_base}_{sufixo_tag}{extensao}"
-        
+        for suf in ("_[FEITO]", "_[JA_EXISTE]"):
+            if nome_sem_ext.endswith(suf):
+                nome_sem_ext = nome_sem_ext[:-len(suf)]
+                break
+
+        novo_nome = f"{nome_sem_ext}_{sufixo_tag}{extensao}"
         caminho_destino_final = os.path.join(pasta_destino, novo_nome)
-        
         shutil.move(caminho_arquivo_original, caminho_destino_final)
-        
         log(f"[INFO] Arquivo movido e renomeado para: {caminho_destino_final}", log_file)
     except Exception as e:
         log(f"[ERRO] Falha ao mover/renomear o arquivo {caminho_arquivo_original}. Erro: {e}", log_file)
@@ -421,8 +396,12 @@ def upload_arquivo_para_loja(driver, wait, numero_loja_formatado, caminho_arquiv
         contagem_antes = len(nomes_existentes)
         log(f"[INFO] Contagem antes do upload para '{nome_arquivo_original}': {contagem_antes} arquivos.", log_file)
 
-        if any(normalizar(ex) == normalizar(nome_final_alvo) for ex in nomes_existentes):
-            log(f"[SKIP] '{nome_final_alvo}' ja existe na loja {numero_loja_formatado}. Pulando.", log_file)
+        if contagem_antes == 0:
+            log(f"[AVISO] Lista de anexos vazia para loja {numero_loja_formatado} — a checagem de duplicata pode não estar efetiva.", log_file)
+
+        nome_normalizado_alvo = normalizar(nome_final_alvo)
+        if any(normalizar(ex) == nome_normalizado_alvo for ex in nomes_existentes):
+            log(f"[SKIP] '{nome_final_alvo}' (normalizado: '{nome_normalizado_alvo}') ja existe na loja {numero_loja_formatado}. Pulando upload.", log_file)
             navegar_para_acordos(driver, wait)
             return 'JA_EXISTE'
         
@@ -431,8 +410,9 @@ def upload_arquivo_para_loja(driver, wait, numero_loja_formatado, caminho_arquiv
         log(f"[OK] Anexado '{nome_arquivo_original}' para a loja {numero_loja_formatado}.", log_file)
 
         try:
-            total_inputs = len(driver.find_elements(By.XPATH, "//input[@type='file']"))
-            valor_input = input_alvo.get_attribute('value') or '(vazio)'
+            inputs_atuais = driver.find_elements(By.XPATH, "//input[@type='file']")
+            total_inputs = len(inputs_atuais)
+            valor_input = inputs_atuais[2].get_attribute('value') or '(vazio)'
             total_previews = len(driver.find_elements(By.CSS_SELECTOR, "div.dz-preview"))
             log(f"[DEBUG] Inputs de arquivo na página: {total_inputs} | Value do input alvo: '{valor_input}' | Pré-visualizações no dropzone: {total_previews}", log_file)
         except Exception as e:
@@ -501,9 +481,10 @@ def upload_arquivo_para_loja(driver, wait, numero_loja_formatado, caminho_arquiv
         navegar_para_acordos(driver, wait)
         if abrir_edicao_da_loja(driver, wait, numero_loja_formatado, nome_loja, log_file) == 'OK':
             anexos_salvos = obter_anexos_salvos(driver, wait, log_file)
-            if any(normalizar(a) == normalizar(nome_final_alvo) for a in anexos_salvos):
+            contagem_depois = len(anexos_salvos)
+            if contagem_depois > contagem_antes:
                 navegar_para_acordos(driver, wait)
-                log(f"[SUCESSO CONFIRMADO] '{nome_final_alvo}' confirmado como salvo na loja {numero_loja_formatado}.", log_file, registrar_em_arquivo=False)
+                log(f"[SUCESSO CONFIRMADO] '{nome_final_alvo}' salvo na loja {numero_loja_formatado} (anexos: {contagem_antes} → {contagem_depois}).", log_file, registrar_em_arquivo=False)
                 return 'SUCESSO'
             navegar_para_acordos(driver, wait)
             return 'FALHA_VERIFICACAO'
@@ -559,7 +540,7 @@ def _reiniciar_sessao(driver, wait, usuario, senha, log_file):
 
     return driver, wait
 
-def processar_um_unico_arquivo(driver, wait, nome_arquivo, log_file, lojas_confirmadas=None):
+def processar_um_unico_arquivo(driver, wait, nome_arquivo, log_file, lojas_confirmadas=None, diretorio_override=None):
     if lojas_confirmadas is None:
         lojas_confirmadas = {}
 
@@ -569,14 +550,10 @@ def processar_um_unico_arquivo(driver, wait, nome_arquivo, log_file, lojas_confi
     nome_base, extensao = os.path.splitext(nome_arquivo)
 
     sufixo_feito = "_[FEITO]"
-    sufixo_falha = "_[FALHA_MANUAL]"
     sufixo_ja_existe = "_[JA_EXISTE]"
 
     if nome_base.endswith(sufixo_feito):
         nome_base_limpo = nome_base[:-len(sufixo_feito)]
-        nome_arquivo_limpo = nome_base_limpo + extensao
-    elif nome_base.endswith(sufixo_falha):
-        nome_base_limpo = nome_base[:-len(sufixo_falha)]
         nome_arquivo_limpo = nome_base_limpo + extensao
     elif nome_base.endswith(sufixo_ja_existe):
         nome_base_limpo = nome_base[:-len(sufixo_ja_existe)]
@@ -592,7 +569,7 @@ def processar_um_unico_arquivo(driver, wait, nome_arquivo, log_file, lojas_confi
     if not numeros_loja:
         return 'FALHA_MANUAL', "Nenhum número de loja encontrado no nome"
 
-    caminho_arquivo_preparado = renomear_e_preparar_arquivo(nome_arquivo_completo, nome_arquivo_limpo, log_file)
+    caminho_arquivo_preparado = renomear_e_preparar_arquivo(nome_arquivo_completo, nome_arquivo_limpo, log_file, diretorio_override)  # [MUDANÇA - Reorganização de pastas]
     if not caminho_arquivo_preparado:
         return 'FALHA_MANUAL', "Erro ao preparar arquivo (verifique padrão da vigência)"
 
@@ -642,7 +619,12 @@ def processar_um_unico_arquivo(driver, wait, nome_arquivo, log_file, lojas_confi
     if os.path.exists(caminho_arquivo_preparado):
         os.remove(caminho_arquivo_preparado)
 
-    if resultados_lojas['FALHA_MANUAL'] or resultados_lojas['UPLOAD_NAO_CONFIRMADO'] or resultados_lojas['FALHA_CRIACAO']:
+    if resultados_lojas['SUCESSO']:
+        return 'SUCESSO', "Todas as lojas processadas com sucesso"
+    elif resultados_lojas['JA_EXISTE']:
+        motivo = f"Arquivo já existia em todas as lojas: {', '.join(resultados_lojas['JA_EXISTE'])}"
+        return 'JA_EXISTE', motivo
+    else:
         motivos = []
         if resultados_lojas['FALHA_MANUAL']:
             motivos.append(f"Lojas não encontradas: {', '.join(resultados_lojas['FALHA_MANUAL'])}")
@@ -650,18 +632,9 @@ def processar_um_unico_arquivo(driver, wait, nome_arquivo, log_file, lojas_confi
             motivos.append(f"Falha ao criar lojas no ComuniQ: {', '.join(resultados_lojas['FALHA_CRIACAO'])}")
         if resultados_lojas['UPLOAD_NAO_CONFIRMADO']:
             motivos.append(f"Upload não confirmado após 3 tentativas: {', '.join(resultados_lojas['UPLOAD_NAO_CONFIRMADO'])}")
-        return 'FALHA_MANUAL', '; '.join(motivos)
-    elif resultados_lojas['FALHA_RECUPERAVEL']:
-        motivo = f"Falha de sistema nas lojas: {', '.join(resultados_lojas['FALHA_RECUPERAVEL'])}"
-        return 'FALHA_RECUPERAVEL', motivo
-    elif resultados_lojas['SUCESSO']:
-        return 'SUCESSO', "Todas as lojas processadas com sucesso"
-    elif resultados_lojas['JA_EXISTE']:
-        motivo = f"Arquivo já existia em todas as lojas: {', '.join(resultados_lojas['JA_EXISTE'])}"
-        return 'JA_EXISTE', motivo
-
-    else:
-        return 'SUCESSO', "Todas as lojas processadas com sucesso"
+        if resultados_lojas['FALHA_RECUPERAVEL']:
+            motivos.append(f"Falha de sistema: {', '.join(resultados_lojas['FALHA_RECUPERAVEL'])}")
+        return 'FALHA', '; '.join(motivos)
 
 def _sessao_morta(erro):
     texto = str(erro).lower()
@@ -677,6 +650,86 @@ def _sessao_morta(erro):
     ]
     return any(termo in texto for termo in termos)
 
+def processar_pasta_reprocessar(driver, wait, pasta_reprocessar, pasta_sucesso, log_file, usuario, senha, lojas_confirmadas_por_arquivo, parar_event=None):
+    if not os.path.exists(pasta_reprocessar):
+        return
+
+    extensoes_permitidas = ['.pdf', '.doc', '.docx']
+    arquivos_reprocessar = [
+        f for f in os.listdir(pasta_reprocessar)
+        if os.path.isfile(os.path.join(pasta_reprocessar, f))
+        and os.path.splitext(f)[1].lower() in extensoes_permitidas
+        and not re.search(r'_(?:\[FEITO\]|\[JA_EXISTE\])\.', f)
+    ]
+
+    if not arquivos_reprocessar:
+        # Pasta vazia, remove
+        try:
+            os.rmdir(pasta_reprocessar)
+            log("[INFO] Pasta Reprocessar/ excluída (estava vazia).", log_file)
+        except OSError:
+            pass
+        return
+
+    log(f"=== REPROCESSAMENTO: {len(arquivos_reprocessar)} arquivo(s) na pasta Reprocessar/ ===", log_file, espacamento=True)
+
+    for nome_arquivo in arquivos_reprocessar:
+        if parar_event and parar_event.is_set():
+            log("[INTERRUPÇÃO] Processo interrompido.", log_file); break
+
+        caminho_reprocessar = os.path.join(pasta_reprocessar, nome_arquivo)
+        resultado, motivo = None, None
+
+        tentativas_sessao = 0
+        while True:
+            try:
+                resultado, motivo = processar_um_unico_arquivo(
+                    driver, wait, nome_arquivo, log_file,
+                    lojas_confirmadas_por_arquivo.setdefault(nome_arquivo, {}),
+                    diretorio_override=pasta_reprocessar
+                )
+                break
+            except ReinicioProgramadoNecessario:
+                log(f"[INFO] Executando reinício programado do driver para '{nome_arquivo}' (reprocessar)...", log_file, espacamento=True)
+                driver, wait = _reiniciar_sessao(driver, wait, usuario, senha, log_file)
+                if not driver:
+                    log("[ERRO] Falha no reinício programado do driver.", log_file)
+                    resultado, motivo = 'FALHA', 'Falha ao reinicializar o driver (reinício programado)'
+                    break
+                continue
+            except Exception as e:
+                if _sessao_morta(e):
+                    tentativas_sessao += 1
+                    log(f"[AVISO] Sessão do navegador encerrada ao reprocessar '{nome_arquivo}' (tentativa {tentativas_sessao}/2). Reinicializando...", log_file)
+                    driver, wait = _reiniciar_sessao(driver, wait, usuario, senha, log_file)
+                    if not driver:
+                        resultado, motivo = 'FALHA', 'Erro de sessão durante o reprocessamento'
+                        break
+                    continue
+                else:
+                    log(f"[ERRO FATAL] Erro inesperado ao reprocessar '{nome_arquivo}': {e}", log_file, espacamento=True)
+                    resultado, motivo = 'FALHA', f'Erro inesperado: {e}'
+                    break
+
+        if resultado is None:
+            resultado, motivo = 'FALHA', 'Erro de sessão/inesperado durante o reprocessamento'
+
+        if resultado == 'SUCESSO':
+            mover_e_renomear_arquivo(caminho_reprocessar, pasta_sucesso, "[FEITO]", log_file)
+        elif resultado == 'JA_EXISTE':
+            mover_e_renomear_arquivo(caminho_reprocessar, pasta_sucesso, "[JA_EXISTE]", log_file)
+        else:
+            # Falha: arquivo continua em Reprocessar/ (não move)
+            log(f"[AVISO] Arquivo '{nome_arquivo}' falhou ao reprocessar, mantido na pasta Reprocessar/.", log_file)
+
+    # Se Reprocessar/ ficou vazia, exclui
+    try:
+        if os.path.exists(pasta_reprocessar) and not os.listdir(pasta_reprocessar):
+            os.rmdir(pasta_reprocessar)
+            log("[INFO] Pasta Reprocessar/ excluída (todos os arquivos processados com sucesso).", log_file, espacamento=True)
+    except OSError:
+        pass
+
 def processar_arquivos(diretorio_origem, pasta_temp, log_file_path, usuario, senha, parar_event=None):
     if os.path.exists(log_file_path): os.remove(log_file_path)
 
@@ -686,22 +739,19 @@ def processar_arquivos(diretorio_origem, pasta_temp, log_file_path, usuario, sen
         global DIRETORIO_ORIGEM, PASTA_TEMP, LOG_FILE_PATH
         DIRETORIO_ORIGEM = diretorio_origem; PASTA_TEMP = pasta_temp; LOG_FILE_PATH = log_file_path
         
-        nome_pasta_feitos = "Feitos"
-        nome_pasta_falhas = "Falhas_Requer_Acao_Manual"
-        nome_pasta_ja_existe = "Ja_Existe"
+        nome_pasta_sucesso = "Sucesso"
+        nome_pasta_reprocessar = "Reprocessar"
         
-        if os.path.basename(diretorio_origem) in [nome_pasta_feitos, nome_pasta_falhas, nome_pasta_ja_existe]:
-            diretorio_raiz = os.path.dirname(diretorio_origem)
+        base_normalizado = os.path.basename(diretorio_origem.rstrip(os.sep))
+        if base_normalizado in [nome_pasta_sucesso, nome_pasta_reprocessar]:
+            diretorio_raiz = os.path.dirname(diretorio_origem.rstrip(os.sep))
         else:
             diretorio_raiz = diretorio_origem
 
-        pasta_feitos = os.path.join(diretorio_raiz, nome_pasta_feitos)
-        pasta_falhas_manual = os.path.join(diretorio_raiz, nome_pasta_falhas)
-        pasta_ja_existe = os.path.join(diretorio_raiz, nome_pasta_ja_existe)
+        pasta_sucesso = os.path.join(diretorio_raiz, nome_pasta_sucesso)
+        pasta_reprocessar = os.path.join(diretorio_raiz, nome_pasta_reprocessar)
         
-        os.makedirs(pasta_feitos, exist_ok=True)
-        os.makedirs(pasta_falhas_manual, exist_ok=True)
-        os.makedirs(pasta_ja_existe, exist_ok=True)
+        os.makedirs(pasta_sucesso, exist_ok=True)
         
         resultados_finais_falhas = []
         driver = None
@@ -717,72 +767,83 @@ def processar_arquivos(diretorio_origem, pasta_temp, log_file_path, usuario, sen
             if not navegar_para_acordos(driver, wait):
                 raise Exception("Falha na navegação inicial.")
 
-            extensoes_permitidas = ['.pdf', '.doc', '.docx']
-            arquivos_para_processar = [f for f in os.listdir(diretorio_origem) if os.path.isfile(os.path.join(diretorio_origem, f)) and os.path.splitext(f)[1].lower() in extensoes_permitidas]
-
-            log(f"Encontrados {len(arquivos_para_processar)} arquivos para processar em '{diretorio_origem}'.", log_file)
-
             lojas_confirmadas_por_arquivo = {}
+            processar_pasta_reprocessar(driver, wait, pasta_reprocessar, pasta_sucesso, log_file, usuario, senha, lojas_confirmadas_por_arquivo, parar_event)
 
-            for nome_arquivo in arquivos_para_processar:
-                if parar_event and parar_event.is_set():
-                    log("[INTERRUPÇÃO] Processo interrompido.", log_file); break
-                
-                caminho_original = os.path.join(diretorio_origem, nome_arquivo)
-                resultado, motivo = None, None
-               
-                tentativas_sessao = 0
-                while True:
-                    try:
-                        resultado, motivo = processar_um_unico_arquivo(driver, wait, nome_arquivo, log_file, lojas_confirmadas_por_arquivo.setdefault(nome_arquivo, {}))
-                        break
-                    except ReinicioProgramadoNecessario:
-                        log(f"[INFO] Executando reinício programado do driver para '{nome_arquivo}'...", log_file, espacamento=True)
-                        driver, wait = _reiniciar_sessao(driver, wait, usuario, senha, log_file)
-                        if not driver:
-                            log("[ERRO] Falha no reinício programado do driver.", log_file)
-                            resultado, motivo = 'FALHA_RECUPERAVEL', 'Falha ao reinicializar o driver (reinício programado)'
+            veio_da_reprocessar = base_normalizado == nome_pasta_reprocessar
+
+            if veio_da_reprocessar:
+                log("[INFO] Execução diretamente sobre Reprocessar/; processamento já concluído pelo reprocessador.", log_file, espacamento=True)
+            elif not os.path.exists(diretorio_origem):
+                log("[INFO] Diretório de origem não existe mais (nada a processar).", log_file)
+            else:
+                extensoes_permitidas = ['.pdf', '.doc', '.docx']
+                arquivos_para_processar = [
+                    f for f in os.listdir(diretorio_origem)
+                    if os.path.isfile(os.path.join(diretorio_origem, f))
+                    and os.path.splitext(f)[1].lower() in extensoes_permitidas
+                    and not re.search(r'_(?:\[FEITO\]|\[JA_EXISTE\])\.', f)
+                ]
+
+                log(f"Encontrados {len(arquivos_para_processar)} arquivos para processar em '{diretorio_origem}'.", log_file)
+
+                for nome_arquivo in arquivos_para_processar:
+                    if parar_event and parar_event.is_set():
+                        log("[INTERRUPÇÃO] Processo interrompido.", log_file); break
+                    
+                    caminho_original = os.path.join(diretorio_origem, nome_arquivo)
+                    resultado, motivo = None, None
+                   
+                    tentativas_sessao = 0
+                    while True:
+                        try:
+                            resultado, motivo = processar_um_unico_arquivo(driver, wait, nome_arquivo, log_file, lojas_confirmadas_por_arquivo.setdefault(nome_arquivo, {}))
                             break
-                        continue
-                    except Exception as e:
-                        if _sessao_morta(e):
-                            tentativas_sessao += 1
-                            log(f"[AVISO] Sessão do navegador encerrada ao processar '{nome_arquivo}' (tentativa {tentativas_sessao}/2). Reinicializando...", log_file)
+                        except ReinicioProgramadoNecessario:
+                            log(f"[INFO] Executando reinício programado do driver para '{nome_arquivo}'...", log_file, espacamento=True)
                             driver, wait = _reiniciar_sessao(driver, wait, usuario, senha, log_file)
                             if not driver:
-                                resultado, motivo = 'FALHA_RECUPERAVEL', 'Erro de sessão durante o processamento'
+                                log("[ERRO] Falha no reinício programado do driver.", log_file)
+                                resultado, motivo = 'FALHA', 'Falha ao reinicializar o driver (reinício programado)'
                                 break
                             continue
-                        else:
-                            log(f"[ERRO FATAL] Erro inesperado ao processar '{nome_arquivo}': {e}", log_file, espacamento=True)
-                            resultado, motivo = 'FALHA_RECUPERAVEL', f'Erro inesperado: {e}'
-                            break 
-                if resultado is None:
-                    resultado, motivo = 'FALHA_RECUPERAVEL', 'Erro de sessão/inesperado durante o processamento'
+                        except Exception as e:
+                            if _sessao_morta(e):
+                                tentativas_sessao += 1
+                                log(f"[AVISO] Sessão do navegador encerrada ao processar '{nome_arquivo}' (tentativa {tentativas_sessao}/2). Reinicializando...", log_file)
+                                driver, wait = _reiniciar_sessao(driver, wait, usuario, senha, log_file)
+                                if not driver:
+                                    resultado, motivo = 'FALHA', 'Erro de sessão durante o processamento'
+                                    break
+                                continue
+                            else:
+                                log(f"[ERRO FATAL] Erro inesperado ao processar '{nome_arquivo}': {e}", log_file, espacamento=True)
+                                resultado, motivo = 'FALHA', f'Erro inesperado: {e}'
+                                break 
+                    if resultado is None:
+                        resultado, motivo = 'FALHA', 'Erro de sessão/inesperado durante o processamento'
 
-                if resultado == 'SUCESSO':
-                    mover_e_renomear_arquivo(caminho_original, pasta_feitos, "[FEITO]", log_file)
-                elif resultado == 'FALHA_MANUAL':
-                    mover_e_renomear_arquivo(caminho_original, pasta_falhas_manual, "[FALHA_MANUAL]", log_file)
-                    resultados_finais_falhas.append({'arquivo': nome_arquivo, 'motivo': motivo, 'tipo': 'MANUAL'})
-                elif resultado == 'FALHA_RECUPERAVEL':
-                    log(f"[AVISO] Arquivo {nome_arquivo} falhou, mas será mantido para nova tentativa.", log_file)
-                    resultados_finais_falhas.append({'arquivo': nome_arquivo, 'motivo': motivo, 'tipo': 'RECUPERAVEL'})
-                elif resultado == 'JA_EXISTE':
-                    mover_e_renomear_arquivo(caminho_original, pasta_ja_existe, "[JA_EXISTE]", log_file)
+                    if resultado == 'SUCESSO':
+                        mover_e_renomear_arquivo(caminho_original, pasta_sucesso, "[FEITO]", log_file)
+                    elif resultado == 'JA_EXISTE':
+                        mover_e_renomear_arquivo(caminho_original, pasta_sucesso, "[JA_EXISTE]", log_file)
+                    else:
+                        os.makedirs(pasta_reprocessar, exist_ok=True)
+                        shutil.move(caminho_original, os.path.join(pasta_reprocessar, nome_arquivo))
+                        log(f"[INFO] Arquivo '{nome_arquivo}' movido para Reprocessar/.", log_file)
+                        resultados_finais_falhas.append({'arquivo': nome_arquivo, 'motivo': motivo})
         
         except Exception as e:
             log(f"[ERRO FATAL] Ocorreu um erro geral no processo: {e}", log_file, espacamento=True)
         
         finally:
-            falhas_que_exigem_acao = [f for f in resultados_finais_falhas if f.get('tipo') == 'MANUAL']
-            if falhas_que_exigem_acao:
-                caminho_txt_erros = os.path.join(pasta_falhas_manual, "motivo_dos_erros.txt")
-                with open(caminho_txt_erros, 'w', encoding='utf-8') as f_erros:
-                    f_erros.write(f"Relatório de Falhas Manuais - {datetime.now().strftime('%Y-%m-%d %H:%M')}\n" + "="*40 + "\n\n")
-                    for falha in falhas_que_exigem_acao:
-                        f_erros.write(f"ARQUIVO: {falha['arquivo']}\n  MOTIVO: {falha['motivo']}\n\n")
-            
+            try:
+                if os.path.exists(pasta_reprocessar) and not os.listdir(pasta_reprocessar):
+                    os.rmdir(pasta_reprocessar)
+                    log("[INFO] Pasta Reprocessar/ excluída (todos os arquivos processados com sucesso).", log_file, espacamento=True)
+            except OSError:
+                pass
+
             log(f"=== FIM DA AUTOMAÇÃO: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ===", log_file, espacamento=True)
             if driver: driver.quit()
         return resultados_finais_falhas
