@@ -95,8 +95,8 @@ class App:
                 self.usuario = config.get("usuario", "")
                 self.senha = config.get("senha", "") 
         except (FileNotFoundError, json.JSONDecodeError):
-            self.usuario = "pamela.lanferdini@Quero-Quero.com.br"
-            self.senha = "Quero@2025"
+            self.usuario = ""
+            self.senha = ""
             self.gravar_credenciais()
 
     def gravar_credenciais(self):
