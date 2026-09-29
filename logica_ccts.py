@@ -1,8 +1,8 @@
 import time
 import os
 import re
-import json
 import shutil
+import configparser  # leitura/gravação do config.ini
 import win32com.client
 from datetime import datetime
 from selenium import webdriver
@@ -12,6 +12,66 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from webdriver_manager.chrome import ChromeDriverManager
 from selenium.common.exceptions import TimeoutException
+from enviar_email import enviar_relatorio  # envio do relatório por email ao fim da execução
+
+APP_CONFIG_DIR = os.path.join(os.path.expanduser("~"), ".RoboComuniq")  # pasta de config fora do projeto: C:\Users\<user>\.RoboComuniq (funciona igual no .exe e no script)
+os.makedirs(APP_CONFIG_DIR, exist_ok=True)  # cria a pasta se não existir
+config_file_path = os.path.join(APP_CONFIG_DIR, "config.ini")  # caminho do config.ini (mesmo usado pelo enviar_email.py)
+
+################################################################
+
+def _ler_config():  # lê o config.ini e devolve o ConfigParser (vazio se o arquivo não existir)
+    config = configparser.ConfigParser(interpolation=None)  # interpolation=None para senhas com '%' não quebrarem a leitura
+    if os.path.exists(config_file_path):  # só lê se o arquivo já existir
+        config.read(config_file_path, encoding='utf-8')  # carrega em utf-8 (acentos)
+    return config  # devolve o objeto de configuração
+
+def _gravar_config(config):  # grava o ConfigParser no config.ini
+    with open(config_file_path, 'w', encoding='utf-8') as configfile:  # sobrescreve o arquivo com o conteúdo atual
+        config.write(configfile)  # escreve as seções/chaves
+
+def garantir_config_inicial():
+    # Cria o config.ini na primeira execução com as seções [Login], [Settings] e [Email].
+    # Se o arquivo já existir, NÃO sobrescreve nada: só adiciona o que estiver faltando.
+    config = _ler_config()  # conteúdo atual (vazio se o arquivo não existir)
+    alterado = False  # só regrava o arquivo se algo for adicionado
+
+    if 'Login' not in config:  # seção de credenciais do ComuniQ ausente
+        config['Login'] = {'Usuario': '', 'Senha': ''}  # cria vazia (preenchida pelo botão "Editar Login")
+        alterado = True  # precisa gravar
+
+    if 'Settings' not in config:  # seção de configurações ausente
+        config['Settings'] = {'CriarLojaAutomaticamente': 'False'}  # por padrão não cria loja automaticamente
+        alterado = True  # precisa gravar
+
+    if 'Email' not in config:  # seção de email ausente
+        config['Email'] = {}  # cria vazia; as chaves são adicionadas abaixo
+        alterado = True  # precisa gravar
+
+    email_cfg = config['Email']  # atalho para a seção [Email]
+    for chave in ('EmailRemetente', 'SenhaApp', 'EmailDestinatario'):  # chaves obrigatórias do envio do relatório
+        if chave not in email_cfg:  # chave ausente (não mexe nas que já existem)
+            email_cfg[chave] = ''  # adiciona vazia para o usuário preencher
+            alterado = True  # precisa gravar
+
+    if alterado:  # algo foi adicionado
+        _gravar_config(config)  # salva o config.ini
+
+def carregar_credenciais():  # devolve (usuario, senha) do config.ini
+    config = _ler_config()  # lê o arquivo
+    return config.get('Login', 'Usuario', fallback=''), config.get('Login', 'Senha', fallback='')  # vazio se não configurado
+
+def salvar_credenciais(usuario, senha):  # grava usuário/senha no config.ini preservando as outras seções
+    config = _ler_config()  # lê o conteúdo atual para não perder [Settings]/[Email]
+    if 'Login' not in config:  # seção ausente
+        config['Login'] = {}  # cria a seção
+    config['Login']['Usuario'] = usuario  # atualiza o usuário
+    config['Login']['Senha'] = senha  # atualiza a senha
+    _gravar_config(config)  # salva o arquivo
+
+garantir_config_inicial()  # garante o config.ini assim que o módulo é importado (igual ao robô do mediador)
+
+################################################################
 
 LOJAS_POR_REINICIO = 10
 
@@ -65,12 +125,10 @@ def extrair_numeros_loja(nome_arquivo):
     return re.findall(r'\b\d{1,3}\b', primeira_parte)
 
 def carregar_flag_criar_loja():
-    try:
-        caminho_config = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
-        with open(caminho_config, 'r', encoding='utf-8') as f:
-            return bool(json.load(f).get("criar_loja_automaticamente", False))
-    except Exception:
-        return False
+    try:  # valor inválido no ini (ex.: "talvez") levanta ValueError
+        return _ler_config().getboolean('Settings', 'CriarLojaAutomaticamente', fallback=False)  # lê do config.ini (aceita True/False, sim: 1/0, yes/no, on/off)
+    except ValueError:  # valor não reconhecido como booleano
+        return False  # por segurança, não cria loja
 
 def extrair_cidade_loja(nome_arquivo_limpo):
     partes = nome_arquivo_limpo.split('_')
@@ -650,7 +708,7 @@ def _sessao_morta(erro):
     ]
     return any(termo in texto for termo in termos)
 
-def processar_pasta_reprocessar(driver, wait, pasta_reprocessar, pasta_sucesso, log_file, usuario, senha, lojas_confirmadas_por_arquivo, parar_event=None):
+def processar_pasta_reprocessar(driver, wait, pasta_reprocessar, pasta_sucesso, log_file, usuario, senha, lojas_confirmadas_por_arquivo, resumo, parar_event=None):  # resumo: dict compartilhado com processar_arquivos para o email
     if not os.path.exists(pasta_reprocessar):
         return
 
@@ -716,11 +774,14 @@ def processar_pasta_reprocessar(driver, wait, pasta_reprocessar, pasta_sucesso, 
 
         if resultado == 'SUCESSO':
             mover_e_renomear_arquivo(caminho_reprocessar, pasta_sucesso, "[FEITO]", log_file)
+            resumo['sucesso'].append(nome_arquivo)  # conta no email como enviado com sucesso
         elif resultado == 'JA_EXISTE':
             mover_e_renomear_arquivo(caminho_reprocessar, pasta_sucesso, "[JA_EXISTE]", log_file)
+            resumo['ja_existe'].append(nome_arquivo)  # conta no email como já existente
         else:
             # Falha: arquivo continua em Reprocessar/ (não move)
             log(f"[AVISO] Arquivo '{nome_arquivo}' falhou ao reprocessar, mantido na pasta Reprocessar/.", log_file)
+            resumo['falhas'].append({'arquivo': nome_arquivo, 'motivo': motivo})  # lista no email com o motivo da falha
 
     # Se Reprocessar/ ficou vazia, exclui
     try:
@@ -732,6 +793,8 @@ def processar_pasta_reprocessar(driver, wait, pasta_reprocessar, pasta_sucesso, 
 
 def processar_arquivos(diretorio_origem, pasta_temp, log_file_path, usuario, senha, parar_event=None):
     if os.path.exists(log_file_path): os.remove(log_file_path)
+    data_inicio = datetime.now()  # data/hora de início, usada no assunto/corpo do email
+    resumo = {'sucesso': [], 'ja_existe': [], 'falhas': [], 'erro_fatal': None}  # acumula os resultados da execução para o email
 
     with open(log_file_path, 'a', encoding='utf-8') as log_file:
         log(f"=== INÍCIO DA AUTOMAÇÃO: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ===", log_file, espacamento=True)
@@ -753,11 +816,11 @@ def processar_arquivos(diretorio_origem, pasta_temp, log_file_path, usuario, sen
         
         os.makedirs(pasta_sucesso, exist_ok=True)
         
-        resultados_finais_falhas = []
+        resultados_finais_falhas = resumo['falhas']  # mesma lista do resumo: falhas da pasta de origem e da Reprocessar/ vão juntas para o email
         driver = None
         try:
             driver = inicializar_driver()
-            if not driver: return []
+            if not driver: raise Exception("Falha ao inicializar o Chrome driver.")  # antes era 'return []'; agora cai no except e o erro vai para o email
 
             wait = WebDriverWait(driver, 60)
 
@@ -768,7 +831,7 @@ def processar_arquivos(diretorio_origem, pasta_temp, log_file_path, usuario, sen
                 raise Exception("Falha na navegação inicial.")
 
             lojas_confirmadas_por_arquivo = {}
-            processar_pasta_reprocessar(driver, wait, pasta_reprocessar, pasta_sucesso, log_file, usuario, senha, lojas_confirmadas_por_arquivo, parar_event)
+            processar_pasta_reprocessar(driver, wait, pasta_reprocessar, pasta_sucesso, log_file, usuario, senha, lojas_confirmadas_por_arquivo, resumo, parar_event)  # passa o resumo para registrar os resultados da Reprocessar/
 
             veio_da_reprocessar = base_normalizado == nome_pasta_reprocessar
 
@@ -825,8 +888,10 @@ def processar_arquivos(diretorio_origem, pasta_temp, log_file_path, usuario, sen
 
                     if resultado == 'SUCESSO':
                         mover_e_renomear_arquivo(caminho_original, pasta_sucesso, "[FEITO]", log_file)
+                        resumo['sucesso'].append(nome_arquivo)  # conta no email como enviado com sucesso
                     elif resultado == 'JA_EXISTE':
                         mover_e_renomear_arquivo(caminho_original, pasta_sucesso, "[JA_EXISTE]", log_file)
+                        resumo['ja_existe'].append(nome_arquivo)  # conta no email como já existente
                     else:
                         os.makedirs(pasta_reprocessar, exist_ok=True)
                         shutil.move(caminho_original, os.path.join(pasta_reprocessar, nome_arquivo))
@@ -835,7 +900,8 @@ def processar_arquivos(diretorio_origem, pasta_temp, log_file_path, usuario, sen
         
         except Exception as e:
             log(f"[ERRO FATAL] Ocorreu um erro geral no processo: {e}", log_file, espacamento=True)
-        
+            resumo['erro_fatal'] = str(e)  # destaca no email que a execução foi interrompida por erro
+
         finally:
             try:
                 if os.path.exists(pasta_reprocessar) and not os.listdir(pasta_reprocessar):
@@ -846,4 +912,9 @@ def processar_arquivos(diretorio_origem, pasta_temp, log_file_path, usuario, sen
 
             log(f"=== FIM DA AUTOMAÇÃO: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ===", log_file, espacamento=True)
             if driver: driver.quit()
-        return resultados_finais_falhas
+
+    # Envio fora do 'with': o log já foi fechado e está completo para ir em anexo
+    if not (parar_event and parar_event.is_set()):  # não envia se o usuário interrompeu (mesma regra do robô do mediador)
+        print("[EMAIL] Enviando relatório da execução...")  # feedback no console
+        enviar_relatorio(resumo, data_inicio, log_file_path)  # nunca levanta exceção; erros vão para o próprio log
+    return resultados_finais_falhas  # retorno mantido (lista de falhas) para não mudar o contrato com a interface

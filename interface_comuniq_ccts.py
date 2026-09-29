@@ -2,9 +2,8 @@ import customtkinter as ctk
 from tkinter import filedialog, messagebox
 import sys
 import os
-from logica_ccts import processar_arquivos
+from logica_ccts import processar_arquivos, carregar_credenciais, salvar_credenciais  # credenciais agora vêm do config.ini (via logica_ccts)
 import threading
-import json
 
 def resource_path(relative_path):
     try:
@@ -30,7 +29,6 @@ class App:
         self.root.title("Robô CCTs para ComuniQ")
         self.root.geometry("1000x400")
 
-        self.config_file = os.path.join(get_app_path(), "config.json")
         self.usuario = ""
         self.senha = ""
         self.carregar_credenciais()
@@ -89,28 +87,11 @@ class App:
             self.root.after(150, self.animate_spinner, next_index)
 
     def carregar_credenciais(self):
-        try:
-            with open(self.config_file, 'r', encoding='utf-8') as f:
-                config = json.load(f)
-                self.usuario = config.get("usuario", "")
-                self.senha = config.get("senha", "") 
-        except (FileNotFoundError, json.JSONDecodeError):
-            self.usuario = ""
-            self.senha = ""
-            self.gravar_credenciais()
+        self.usuario, self.senha = carregar_credenciais()  # lê [Login] do config.ini (o arquivo é criado ao importar logica_ccts)
 
     def gravar_credenciais(self):
         try:
-            config = {}
-            try:
-                with open(self.config_file, 'r', encoding='utf-8') as f:
-                    config = json.load(f)
-            except (FileNotFoundError, json.JSONDecodeError):
-                pass
-            config["usuario"] = self.usuario
-            config["senha"] = self.senha
-            with open(self.config_file, 'w', encoding='utf-8') as f:
-                json.dump(config, f, indent=4)
+            salvar_credenciais(self.usuario, self.senha)  # grava [Login] no config.ini preservando [Settings] e [Email]
         except Exception as e:
             messagebox.showerror("Erro", f"Não foi possível salvar as credenciais no arquivo de configuração.\nErro: {e}")
 
