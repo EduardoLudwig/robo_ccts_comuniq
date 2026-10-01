@@ -74,6 +74,7 @@ garantir_config_inicial()  # garante o config.ini assim que o módulo é importa
 ################################################################
 
 LOJAS_POR_REINICIO = 10
+MAX_REINICIOS_SESSAO = 3  # reinícios por arquivo quando a sessão do navegador cai; depois disso o arquivo vai para Reprocessar/
 
 class ReinicioProgramadoNecessario(Exception):
     """Sinaliza que o driver deve ser reiniciado (reinício programado a cada N lojas)."""
@@ -642,28 +643,23 @@ def processar_um_unico_arquivo(driver, wait, nome_arquivo, log_file, lojas_confi
 
             if numero_formatado in lojas_confirmadas:
                 resultado_anterior = lojas_confirmadas[numero_formatado]
-                log(f"[PULO] Loja {numero_formatado} já confirmada ('{resultado_anterior}') nesta execução para '{nome_arquivo_completo}'; pulando reenvio.", log_file)
+                log(f"[PULO] Loja {numero_formatado} já processada ('{resultado_anterior}') nesta execução para '{nome_arquivo_completo}'; pulando reenvio.", log_file)
                 resultados_lojas[resultado_anterior].append(numero_formatado)
                 continue
 
             resultado_upload = upload_com_verificacao_e_retry(driver, wait, numero_formatado, caminho_arquivo_preparado, log_file, nome_arquivo_completo, nome_loja)
 
-            if resultado_upload == 'SUCESSO':
-                lojas_confirmadas[numero_formatado] = 'SUCESSO'
-                resultados_lojas['SUCESSO'].append(numero_formatado)
-            elif resultado_upload == 'FALHA_LOJA_NAO_ENCONTRADA':
-                lojas_confirmadas[numero_formatado] = 'FALHA_MANUAL'
-                resultados_lojas['FALHA_MANUAL'].append(numero_formatado)
-            elif resultado_upload == 'FALHA_CRIACAO_LOJA':
-                lojas_confirmadas[numero_formatado] = 'FALHA_CRIACAO_LOJA'
-                resultados_lojas['FALHA_CRIACAO'].append(numero_formatado)
-            elif resultado_upload == 'JA_EXISTE':
-                lojas_confirmadas[numero_formatado] = 'JA_EXISTE'
-                resultados_lojas['JA_EXISTE'].append(numero_formatado)
-            elif resultado_upload == 'UPLOAD_NAO_CONFIRMADO':
-                resultados_lojas['UPLOAD_NAO_CONFIRMADO'].append(numero_formatado)
-            else:
-                resultados_lojas['FALHA_RECUPERAVEL'].append(numero_formatado)
+            chave_resultado = {
+                'SUCESSO': 'SUCESSO',
+                'JA_EXISTE': 'JA_EXISTE',
+                'FALHA_LOJA_NAO_ENCONTRADA': 'FALHA_MANUAL',
+                'FALHA_CRIACAO_LOJA': 'FALHA_CRIACAO',
+                'UPLOAD_NAO_CONFIRMADO': 'UPLOAD_NAO_CONFIRMADO',
+            }.get(resultado_upload, 'FALHA_RECUPERAVEL')
+            # Guarda TODO resultado (inclusive falhas) com a mesma chave de resultados_lojas: após o reinício programado
+            # a loja é pulada em vez de reprocessada, evitando loop infinito quando 10+ lojas falham seguidas
+            lojas_confirmadas[numero_formatado] = chave_resultado
+            resultados_lojas[chave_resultado].append(numero_formatado)
 
             contador_lojas += 1
             if contador_lojas % LOJAS_POR_REINICIO == 0:
@@ -758,7 +754,11 @@ def processar_pasta_reprocessar(driver, wait, pasta_reprocessar, pasta_sucesso, 
             except Exception as e:
                 if _sessao_morta(e):
                     tentativas_sessao += 1
-                    log(f"[AVISO] Sessão do navegador encerrada ao reprocessar '{nome_arquivo}' (tentativa {tentativas_sessao}/2). Reinicializando...", log_file)
+                    if tentativas_sessao > MAX_REINICIOS_SESSAO:
+                        log(f"[ERRO] Sessão do navegador caiu {tentativas_sessao} vezes ao reprocessar '{nome_arquivo}'. Desistindo deste arquivo.", log_file)
+                        resultado, motivo = 'FALHA', f'Sessão do navegador caiu {tentativas_sessao} vezes'
+                        break
+                    log(f"[AVISO] Sessão do navegador encerrada ao reprocessar '{nome_arquivo}' (tentativa {tentativas_sessao}/{MAX_REINICIOS_SESSAO}). Reinicializando...", log_file)
                     driver, wait = _reiniciar_sessao(driver, wait, usuario, senha, log_file)
                     if not driver:
                         resultado, motivo = 'FALHA', 'Erro de sessão durante o reprocessamento'
@@ -873,7 +873,11 @@ def processar_arquivos(diretorio_origem, pasta_temp, log_file_path, usuario, sen
                         except Exception as e:
                             if _sessao_morta(e):
                                 tentativas_sessao += 1
-                                log(f"[AVISO] Sessão do navegador encerrada ao processar '{nome_arquivo}' (tentativa {tentativas_sessao}/2). Reinicializando...", log_file)
+                                if tentativas_sessao > MAX_REINICIOS_SESSAO:
+                                    log(f"[ERRO] Sessão do navegador caiu {tentativas_sessao} vezes ao processar '{nome_arquivo}'. Desistindo deste arquivo.", log_file)
+                                    resultado, motivo = 'FALHA', f'Sessão do navegador caiu {tentativas_sessao} vezes'
+                                    break
+                                log(f"[AVISO] Sessão do navegador encerrada ao processar '{nome_arquivo}' (tentativa {tentativas_sessao}/{MAX_REINICIOS_SESSAO}). Reinicializando...", log_file)
                                 driver, wait = _reiniciar_sessao(driver, wait, usuario, senha, log_file)
                                 if not driver:
                                     resultado, motivo = 'FALHA', 'Erro de sessão durante o processamento'
