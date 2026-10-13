@@ -7,11 +7,13 @@ import win32com.client
 from datetime import datetime
 from selenium import webdriver
 from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from webdriver_manager.chrome import ChromeDriverManager
 from selenium.common.exceptions import TimeoutException
+from selenium.common.exceptions import ElementClickInterceptedException
 from enviar_email import enviar_relatorio  # envio do relatório por email ao fim da execução
 
 APP_CONFIG_DIR = os.path.join(os.path.expanduser("~"), ".RoboComuniq")  # pasta de config fora do projeto: C:\Users\<user>\.RoboComuniq (funciona igual no .exe e no script)
@@ -401,12 +403,40 @@ def mover_e_renomear_arquivo(caminho_arquivo_original, pasta_destino, sufixo_tag
     except Exception as e:
         log(f"[ERRO] Falha ao mover/renomear o arquivo {caminho_arquivo_original}. Erro: {e}", log_file)
 
+def fechar_popup_do_site(driver, log_file):
+    # Pop-up (modal) do ComuniQ que abre por cima da página e bloqueia os cliques.
+    # O conhecido é o "Habilitar Notificações", fechado pelo botão "Agora não"
+    popups = driver.find_elements(By.CSS_SELECTOR, "div.modal.show")
+    if not popups:
+        return
+
+    popup = popups[0]
+    texto_popup = popup.text.replace("\n", " | ")
+    log(f"[AVISO] Pop-up do site aberto. Texto: {texto_popup}", log_file)
+
+    botoes_agora_nao = popup.find_elements(By.XPATH, ".//*[normalize-space(text())='Agora não']")
+    if botoes_agora_nao:
+        botoes_agora_nao[0].click()
+    else:
+        # Outro pop-up, que ainda não conhecemos: tenta fechar com ESC
+        driver.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
+    time.sleep(1)
+
+    # Se o pop-up continuar aberto depois do "Agora não", tenta o ESC
+    if driver.find_elements(By.CSS_SELECTOR, "div.modal.show"):
+        driver.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
+        time.sleep(1)
+
 def abrir_edicao_da_loja(driver, wait, numero_loja_formatado, nome_loja=None, log_file=None):
     try:
         loja_xpath = f"//span[contains(@class, 'mdc-button__label') and starts-with(normalize-space(.), '{numero_loja_formatado}')]"
         elemento_loja = wait.until(EC.element_to_be_clickable((By.XPATH, loja_xpath)))
         driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", elemento_loja)
-        elemento_loja.click()
+        try:
+            elemento_loja.click()
+        except ElementClickInterceptedException:  # o clique foi bloqueado por algo na frente (pop-up)
+            fechar_popup_do_site(driver, log_file)
+            elemento_loja.click()
     except TimeoutException:
         if not (carregar_flag_criar_loja() and nome_loja and log_file):
             return 'LOJA_NAO_ENCONTRADA'
