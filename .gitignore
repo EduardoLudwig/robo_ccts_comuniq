@@ -15,3 +15,5 @@ ideias.txt
 *.md
 
 config.json
+
+.claude

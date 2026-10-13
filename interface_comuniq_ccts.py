@@ -23,8 +23,9 @@ ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme(theme_path)
 
 class App:
-    def __init__(self, root):
+    def __init__(self, root, auto_start=False):
         self.root = root
+        self.auto_start = auto_start  # --auto-start (agendador): usa a pasta do mês atual, inicia sozinho e fecha ao terminar
         self.diretorio_ccts = None
         self.root.title("Robô CCTs para ComuniQ")
         self.root.geometry("1000x400")
@@ -78,6 +79,9 @@ class App:
         self.spinner_running = False
         self.spinner_chars = ["|", "/", "-", "\\"]
 
+        if self.auto_start:
+            self.root.after(500, self.iniciar_processo)  # espera a janela abrir antes de iniciar
+
     def animate_spinner(self, index=0):
         if self.spinner_running:
             self.spinner_label.configure(text=self.spinner_chars[index])
@@ -107,7 +111,7 @@ class App:
         if not self.usuario or not self.senha:
              messagebox.showwarning("Aviso", "Usuário ou senha não configurados. Por favor, edite o login.")
              return
-        if self.diretorio_ccts is None:
+        if self.diretorio_ccts is None and not self.auto_start:  # no automático a pasta é encontrada pela lógica
             messagebox.showwarning("Aviso", "Por favor, selecione um arquivo da pasta dos CCTs antes de iniciar.")
             return
 
@@ -125,7 +129,8 @@ class App:
                
                 processar_arquivos(
                     self.diretorio_ccts, pasta_temp, log_path,
-                    self.usuario, self.senha, self.parar_event
+                    self.usuario, self.senha, self.parar_event,
+                    automatico=self.auto_start
                 )
                 if not self.parar_event.is_set():
                     self.label_status.configure(text=f"Processo concluído! Log gerado em: {log_path}")
@@ -138,6 +143,8 @@ class App:
             finally:
                 self.spinner_running = False
                 self.spinner_label.configure(text="")
+                if self.auto_start:
+                    self.root.after(4000, self.root.destroy)  # fecha sozinho (mesmo comportamento do mediador)
 
 
         self.thread = threading.Thread(target=executar_processo)
@@ -217,5 +224,5 @@ class App:
 
 if __name__ == "__main__":
     root = ctk.CTk()
-    app = App(root)
+    app = App(root, auto_start='--auto-start' in sys.argv)
     root.mainloop()

@@ -44,6 +44,10 @@ def garantir_config_inicial():
         config['Settings'] = {'CriarLojaAutomaticamente': 'False'}  # por padrão não cria loja automaticamente
         alterado = True  # precisa gravar
 
+    if 'PastaBase' not in config['Settings']:  # usada no --auto-start para achar a pasta do mês
+        config['Settings']['PastaBase'] = r'M:\Remuneração e Benefícios\SINDICAIS'
+        alterado = True
+
     if 'Email' not in config:  # seção de email ausente
         config['Email'] = {}  # cria vazia; as chaves são adicionadas abaixo
         alterado = True  # precisa gravar
@@ -137,6 +141,48 @@ def extrair_cidade_loja(nome_arquivo_limpo):
 
 def montar_nome_loja(numero_formatado, cidade):
     return f"{numero_formatado} - {cidade}" if cidade else numero_formatado
+
+def encontrar_pasta_mes(ano, mes):
+    # Acha <PastaBase>\Análises sindicatos lojas {ano}\{mes:02d}_* e devolve (caminho, None) ou (None, motivo).
+    # Ignora acento/maiúsculas (até 2025 a pasta era "Analises") e usa só o número do mês (evita MARÇO x MARCO)
+    pasta_base = _ler_config().get('Settings', 'PastaBase', fallback='')
+    if not os.path.isdir(pasta_base):
+        return None, f"PastaBase não encontrada: '{pasta_base}'"
+
+    nome_pasta_ano = f"analises sindicatos lojas {ano}"
+    pastas_ano = [d for d in os.listdir(pasta_base) if d.lower().replace('á', 'a') == nome_pasta_ano and os.path.isdir(os.path.join(pasta_base, d))]
+    if not pastas_ano:
+        return None, f"Pasta 'Análises sindicatos lojas {ano}' não encontrada em '{pasta_base}'"
+    pasta_ano = os.path.join(pasta_base, pastas_ano[0])
+
+    pastas_mes = [d for d in os.listdir(pasta_ano) if d.startswith(f"{mes:02d}_") and os.path.isdir(os.path.join(pasta_ano, d))]
+    if not pastas_mes:
+        return None, f"Pasta do mês '{mes:02d}_...' não encontrada em '{pasta_ano}'"
+    return os.path.join(pasta_ano, pastas_mes[0]), None
+
+def nome_no_padrao(nome_arquivo):
+    # Mesmo critério do processamento: números de loja antes do 1º '_' e vigência '_AAAA' ou '_AAAA-AAAA'
+    if not extrair_numeros_loja(nome_arquivo):
+        return False
+    nome_sem_extensao = os.path.splitext(nome_arquivo)[0]
+    if not re.search(r'_(\d{4}(?:-\d{4})?)', nome_sem_extensao):
+        return False
+    return True
+
+def listar_arquivos_para_upload(pasta, log_file):
+    # Só arquivos soltos (subpastas são ignoradas) .pdf/.doc/.docx ainda não marcados como [FEITO]/[JA_EXISTE].
+    # Os fora do padrão de nome não são enviados nem movidos: ficam onde estão e só aparecem no log
+    arquivos = []
+    for f in os.listdir(pasta):
+        if not os.path.isfile(os.path.join(pasta, f)) or os.path.splitext(f)[1].lower() not in ('.pdf', '.doc', '.docx'):
+            continue
+        if re.search(r'_(?:\[FEITO\]|\[JA_EXISTE\])\.', f):
+            continue
+        if not nome_no_padrao(f):
+            log(f"[IGNORADO] '{f}' está fora do padrão de nome; não será enviado.", log_file)
+            continue
+        arquivos.append(f)
+    return arquivos
 
 # navegação por cliques até a página de categorias de Acordos 
 def navegar_para_categoria_acordos(driver, wait, log_file):
@@ -649,15 +695,22 @@ def processar_um_unico_arquivo(driver, wait, nome_arquivo, log_file, lojas_confi
 
             resultado_upload = upload_com_verificacao_e_retry(driver, wait, numero_formatado, caminho_arquivo_preparado, log_file, nome_arquivo_completo, nome_loja)
 
-            chave_resultado = {
-                'SUCESSO': 'SUCESSO',
-                'JA_EXISTE': 'JA_EXISTE',
-                'FALHA_LOJA_NAO_ENCONTRADA': 'FALHA_MANUAL',
-                'FALHA_CRIACAO_LOJA': 'FALHA_CRIACAO',
-                'UPLOAD_NAO_CONFIRMADO': 'UPLOAD_NAO_CONFIRMADO',
-            }.get(resultado_upload, 'FALHA_RECUPERAVEL')
-            # Guarda TODO resultado (inclusive falhas) com a mesma chave de resultados_lojas: após o reinício programado
-            # a loja é pulada em vez de reprocessada, evitando loop infinito quando 10+ lojas falham seguidas
+            # Converte o resultado do upload no nome da chave usada em resultados_lojas
+            if resultado_upload == 'SUCESSO':
+                chave_resultado = 'SUCESSO'
+            elif resultado_upload == 'JA_EXISTE':
+                chave_resultado = 'JA_EXISTE'
+            elif resultado_upload == 'FALHA_LOJA_NAO_ENCONTRADA':
+                chave_resultado = 'FALHA_MANUAL'
+            elif resultado_upload == 'FALHA_CRIACAO_LOJA':
+                chave_resultado = 'FALHA_CRIACAO'
+            elif resultado_upload == 'UPLOAD_NAO_CONFIRMADO':
+                chave_resultado = 'UPLOAD_NAO_CONFIRMADO'
+            else:
+                chave_resultado = 'FALHA_RECUPERAVEL'
+
+            # Guarda TODO resultado (inclusive falhas): após o reinício programado a loja é pulada
+            # em vez de reprocessada, evitando loop infinito quando 10+ lojas falham seguidas
             lojas_confirmadas[numero_formatado] = chave_resultado
             resultados_lojas[chave_resultado].append(numero_formatado)
 
@@ -673,22 +726,29 @@ def processar_um_unico_arquivo(driver, wait, nome_arquivo, log_file, lojas_confi
     if os.path.exists(caminho_arquivo_preparado):
         os.remove(caminho_arquivo_preparado)
 
+    # Só vai para Sucesso/ se TODAS as lojas deram certo (sucesso ou já existia).
+    # Se alguma falhar, o arquivo vai para Reprocessar/. Na próxima execução, as lojas que já receberam
+    # o arquivo dão JA_EXISTE (não sobe de novo) e só a que falhou é enviada.
+    motivos = []
+    if resultados_lojas['FALHA_MANUAL']:
+        motivos.append(f"Lojas não encontradas: {', '.join(resultados_lojas['FALHA_MANUAL'])}")
+    if resultados_lojas['FALHA_CRIACAO']:
+        motivos.append(f"Falha ao criar lojas no ComuniQ: {', '.join(resultados_lojas['FALHA_CRIACAO'])}")
+    if resultados_lojas['UPLOAD_NAO_CONFIRMADO']:
+        motivos.append(f"Upload não confirmado após 3 tentativas: {', '.join(resultados_lojas['UPLOAD_NAO_CONFIRMADO'])}")
+    if resultados_lojas['FALHA_RECUPERAVEL']:
+        motivos.append(f"Falha de sistema: {', '.join(resultados_lojas['FALHA_RECUPERAVEL'])}")
+
+    if motivos:
+        if resultados_lojas['SUCESSO']:
+            motivos.append(f"Já enviado para: {', '.join(resultados_lojas['SUCESSO'])}")
+        return 'FALHA', '; '.join(motivos)
+
     if resultados_lojas['SUCESSO']:
         return 'SUCESSO', "Todas as lojas processadas com sucesso"
-    elif resultados_lojas['JA_EXISTE']:
-        motivo = f"Arquivo já existia em todas as lojas: {', '.join(resultados_lojas['JA_EXISTE'])}"
-        return 'JA_EXISTE', motivo
-    else:
-        motivos = []
-        if resultados_lojas['FALHA_MANUAL']:
-            motivos.append(f"Lojas não encontradas: {', '.join(resultados_lojas['FALHA_MANUAL'])}")
-        if resultados_lojas['FALHA_CRIACAO']:
-            motivos.append(f"Falha ao criar lojas no ComuniQ: {', '.join(resultados_lojas['FALHA_CRIACAO'])}")
-        if resultados_lojas['UPLOAD_NAO_CONFIRMADO']:
-            motivos.append(f"Upload não confirmado após 3 tentativas: {', '.join(resultados_lojas['UPLOAD_NAO_CONFIRMADO'])}")
-        if resultados_lojas['FALHA_RECUPERAVEL']:
-            motivos.append(f"Falha de sistema: {', '.join(resultados_lojas['FALHA_RECUPERAVEL'])}")
-        return 'FALHA', '; '.join(motivos)
+
+    motivo = f"Arquivo já existia em todas as lojas: {', '.join(resultados_lojas['JA_EXISTE'])}"
+    return 'JA_EXISTE', motivo
 
 def _sessao_morta(erro):
     texto = str(erro).lower()
@@ -705,16 +765,11 @@ def _sessao_morta(erro):
     return any(termo in texto for termo in termos)
 
 def processar_pasta_reprocessar(driver, wait, pasta_reprocessar, pasta_sucesso, log_file, usuario, senha, lojas_confirmadas_por_arquivo, resumo, parar_event=None):  # resumo: dict compartilhado com processar_arquivos para o email
+    # Devolve (driver, wait): se o navegador for reiniciado aqui dentro, quem chamou precisa continuar com o novo
     if not os.path.exists(pasta_reprocessar):
-        return
+        return driver, wait
 
-    extensoes_permitidas = ['.pdf', '.doc', '.docx']
-    arquivos_reprocessar = [
-        f for f in os.listdir(pasta_reprocessar)
-        if os.path.isfile(os.path.join(pasta_reprocessar, f))
-        and os.path.splitext(f)[1].lower() in extensoes_permitidas
-        and not re.search(r'_(?:\[FEITO\]|\[JA_EXISTE\])\.', f)
-    ]
+    arquivos_reprocessar = listar_arquivos_para_upload(pasta_reprocessar, log_file)
 
     if not arquivos_reprocessar:
         # Pasta vazia, remove
@@ -723,9 +778,10 @@ def processar_pasta_reprocessar(driver, wait, pasta_reprocessar, pasta_sucesso, 
             log("[INFO] Pasta Reprocessar/ excluída (estava vazia).", log_file)
         except OSError:
             pass
-        return
+        return driver, wait
 
-    log(f"=== REPROCESSAMENTO: {len(arquivos_reprocessar)} arquivo(s) na pasta Reprocessar/ ===", log_file, espacamento=True)
+    os.makedirs(pasta_sucesso, exist_ok=True)  # a Sucesso/ do mês anterior pode não existir
+    log(f"=== REPROCESSAMENTO: {len(arquivos_reprocessar)} arquivo(s) em '{pasta_reprocessar}' ===", log_file, espacamento=True)
 
     for nome_arquivo in arquivos_reprocessar:
         if parar_event and parar_event.is_set():
@@ -791,7 +847,11 @@ def processar_pasta_reprocessar(driver, wait, pasta_reprocessar, pasta_sucesso, 
     except OSError:
         pass
 
-def processar_arquivos(diretorio_origem, pasta_temp, log_file_path, usuario, senha, parar_event=None):
+    return driver, wait
+
+def processar_arquivos(diretorio_origem, pasta_temp, log_file_path, usuario, senha, parar_event=None, automatico=False):
+    # automatico=True (--auto-start / agendador): ignora diretorio_origem e usa a pasta do mês atual,
+    # verificando antes a Reprocessar/ do mês anterior
     if os.path.exists(log_file_path): os.remove(log_file_path)
     data_inicio = datetime.now()  # data/hora de início, usada no assunto/corpo do email
     resumo = {'sucesso': [], 'ja_existe': [], 'falhas': [], 'erro_fatal': None}  # acumula os resultados da execução para o email
@@ -799,23 +859,42 @@ def processar_arquivos(diretorio_origem, pasta_temp, log_file_path, usuario, sen
     with open(log_file_path, 'a', encoding='utf-8') as log_file:
         log(f"=== INÍCIO DA AUTOMAÇÃO: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ===", log_file, espacamento=True)
 
+        pasta_mes_anterior = None
+        if automatico:
+            hoje = datetime.now()
+            if hoje.month == 1:  # em janeiro, o mês anterior é dezembro do ano anterior
+                mes_anterior = 12
+                ano_anterior = hoje.year - 1
+            else:
+                mes_anterior = hoje.month - 1
+                ano_anterior = hoje.year
+            diretorio_origem, erro_mes_atual = encontrar_pasta_mes(hoje.year, hoje.month)
+            pasta_mes_anterior, erro_mes_anterior = encontrar_pasta_mes(ano_anterior, mes_anterior)
+            if erro_mes_atual:
+                log(f"[ERRO] {erro_mes_atual}", log_file)
+                resumo['erro_fatal'] = erro_mes_atual  # aparece no email: a execução agendada não achou a pasta do mês
+            if erro_mes_anterior:
+                log(f"[INFO] Reprocessar/ do mês anterior não verificada: {erro_mes_anterior}", log_file)
+
         global DIRETORIO_ORIGEM, PASTA_TEMP, LOG_FILE_PATH
-        DIRETORIO_ORIGEM = diretorio_origem; PASTA_TEMP = pasta_temp; LOG_FILE_PATH = log_file_path
-        
+        DIRETORIO_ORIGEM = diretorio_origem or ""; PASTA_TEMP = pasta_temp; LOG_FILE_PATH = log_file_path
+
         nome_pasta_sucesso = "Sucesso"
         nome_pasta_reprocessar = "Reprocessar"
-        
-        base_normalizado = os.path.basename(diretorio_origem.rstrip(os.sep))
-        if base_normalizado in [nome_pasta_sucesso, nome_pasta_reprocessar]:
-            diretorio_raiz = os.path.dirname(diretorio_origem.rstrip(os.sep))
-        else:
-            diretorio_raiz = diretorio_origem
 
-        pasta_sucesso = os.path.join(diretorio_raiz, nome_pasta_sucesso)
-        pasta_reprocessar = os.path.join(diretorio_raiz, nome_pasta_reprocessar)
-        
-        os.makedirs(pasta_sucesso, exist_ok=True)
-        
+        base_normalizado = pasta_sucesso = pasta_reprocessar = None
+        if diretorio_origem:  # só é None no modo automático quando a pasta do mês atual não existe
+            base_normalizado = os.path.basename(diretorio_origem.rstrip(os.sep))
+            if base_normalizado in [nome_pasta_sucesso, nome_pasta_reprocessar]:
+                diretorio_raiz = os.path.dirname(diretorio_origem.rstrip(os.sep))
+            else:
+                diretorio_raiz = diretorio_origem
+
+            pasta_sucesso = os.path.join(diretorio_raiz, nome_pasta_sucesso)
+            pasta_reprocessar = os.path.join(diretorio_raiz, nome_pasta_reprocessar)
+
+            os.makedirs(pasta_sucesso, exist_ok=True)
+
         resultados_finais_falhas = resumo['falhas']  # mesma lista do resumo: falhas da pasta de origem e da Reprocessar/ vão juntas para o email
         driver = None
         try:
@@ -831,22 +910,26 @@ def processar_arquivos(diretorio_origem, pasta_temp, log_file_path, usuario, sen
                 raise Exception("Falha na navegação inicial.")
 
             lojas_confirmadas_por_arquivo = {}
-            processar_pasta_reprocessar(driver, wait, pasta_reprocessar, pasta_sucesso, log_file, usuario, senha, lojas_confirmadas_por_arquivo, resumo, parar_event)  # passa o resumo para registrar os resultados da Reprocessar/
+            if pasta_mes_anterior:  # modo automático: antes do mês atual, tenta de novo o que ficou pendente no mês anterior
+                log(f"[INFO] Verificando Reprocessar/ do mês anterior: '{pasta_mes_anterior}'", log_file, espacamento=True)
+                driver, wait = processar_pasta_reprocessar(
+                    driver, wait,
+                    os.path.join(pasta_mes_anterior, nome_pasta_reprocessar), os.path.join(pasta_mes_anterior, nome_pasta_sucesso),
+                    log_file, usuario, senha, lojas_confirmadas_por_arquivo, resumo, parar_event
+                )
+            if pasta_reprocessar:
+                driver, wait = processar_pasta_reprocessar(driver, wait, pasta_reprocessar, pasta_sucesso, log_file, usuario, senha, lojas_confirmadas_por_arquivo, resumo, parar_event)  # passa o resumo para registrar os resultados da Reprocessar/
 
             veio_da_reprocessar = base_normalizado == nome_pasta_reprocessar
 
-            if veio_da_reprocessar:
+            if not diretorio_origem:
+                log("[INFO] Sem pasta do mês atual; nada mais a processar.", log_file)
+            elif veio_da_reprocessar:
                 log("[INFO] Execução diretamente sobre Reprocessar/; processamento já concluído pelo reprocessador.", log_file, espacamento=True)
             elif not os.path.exists(diretorio_origem):
                 log("[INFO] Diretório de origem não existe mais (nada a processar).", log_file)
             else:
-                extensoes_permitidas = ['.pdf', '.doc', '.docx']
-                arquivos_para_processar = [
-                    f for f in os.listdir(diretorio_origem)
-                    if os.path.isfile(os.path.join(diretorio_origem, f))
-                    and os.path.splitext(f)[1].lower() in extensoes_permitidas
-                    and not re.search(r'_(?:\[FEITO\]|\[JA_EXISTE\])\.', f)
-                ]
+                arquivos_para_processar = listar_arquivos_para_upload(diretorio_origem, log_file)
 
                 log(f"Encontrados {len(arquivos_para_processar)} arquivos para processar em '{diretorio_origem}'.", log_file)
 
@@ -908,7 +991,7 @@ def processar_arquivos(diretorio_origem, pasta_temp, log_file_path, usuario, sen
 
         finally:
             try:
-                if os.path.exists(pasta_reprocessar) and not os.listdir(pasta_reprocessar):
+                if pasta_reprocessar and os.path.exists(pasta_reprocessar) and not os.listdir(pasta_reprocessar):
                     os.rmdir(pasta_reprocessar)
                     log("[INFO] Pasta Reprocessar/ excluída (todos os arquivos processados com sucesso).", log_file, espacamento=True)
             except OSError:
