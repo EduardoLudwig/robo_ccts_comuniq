@@ -14,7 +14,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from webdriver_manager.chrome import ChromeDriverManager
 from selenium.common.exceptions import TimeoutException
 from selenium.common.exceptions import ElementClickInterceptedException
-from enviar_email import enviar_relatorio  # envio do relatório por email ao fim da execução
+from enviar_email import enviar_relatorio, montar_relatorio  # relatório simples e envio por email ao fim da execução
 
 APP_CONFIG_DIR = os.path.join(os.path.expanduser("~"), ".RoboComuniq")  # pasta de config fora do projeto: C:\Users\<user>\.RoboComuniq (funciona igual no .exe e no script)
 os.makedirs(APP_CONFIG_DIR, exist_ok=True)  # cria a pasta se não existir
@@ -171,9 +171,10 @@ def nome_no_padrao(nome_arquivo):
         return False
     return True
 
-def listar_arquivos_para_upload(pasta, log_file):
+def listar_arquivos_para_upload(pasta, log_file, fora_do_padrao):
     # Só arquivos soltos (subpastas são ignoradas) .pdf/.doc/.docx ainda não marcados como [FEITO]/[JA_EXISTE].
-    # Os fora do padrão de nome não são enviados nem movidos: ficam onde estão e só aparecem no log
+    # Os fora do padrão de nome não são enviados nem movidos: ficam onde estão e entram na lista
+    # fora_do_padrao, que aparece no relatório para a pessoa saber que precisa renomear
     arquivos = []
     for f in os.listdir(pasta):
         if not os.path.isfile(os.path.join(pasta, f)) or os.path.splitext(f)[1].lower() not in ('.pdf', '.doc', '.docx'):
@@ -182,6 +183,7 @@ def listar_arquivos_para_upload(pasta, log_file):
             continue
         if not nome_no_padrao(f):
             log(f"[IGNORADO] '{f}' está fora do padrão de nome; não será enviado.", log_file)
+            fora_do_padrao.append(f)
             continue
         arquivos.append(f)
     return arquivos
@@ -799,7 +801,7 @@ def processar_pasta_reprocessar(driver, wait, pasta_reprocessar, pasta_sucesso, 
     if not os.path.exists(pasta_reprocessar):
         return driver, wait
 
-    arquivos_reprocessar = listar_arquivos_para_upload(pasta_reprocessar, log_file)
+    arquivos_reprocessar = listar_arquivos_para_upload(pasta_reprocessar, log_file, resumo['fora_do_padrao'])
 
     if not arquivos_reprocessar:
         # Pasta vazia, remove
@@ -869,6 +871,14 @@ def processar_pasta_reprocessar(driver, wait, pasta_reprocessar, pasta_sucesso, 
             log(f"[AVISO] Arquivo '{nome_arquivo}' falhou ao reprocessar, mantido na pasta Reprocessar/.", log_file)
             resumo['falhas'].append({'arquivo': nome_arquivo, 'motivo': motivo})  # lista no email com o motivo da falha
 
+        # Dados do arquivo para o relatório simples: resultado final e o que aconteceu em cada loja
+        resumo['arquivos'].append({
+            'arquivo': nome_arquivo,
+            'resultado': resultado,
+            'motivo': motivo,
+            'lojas': lojas_confirmadas_por_arquivo.get(nome_arquivo, {}),
+        })
+
     # Se Reprocessar/ ficou vazia, exclui
     try:
         if os.path.exists(pasta_reprocessar) and not os.listdir(pasta_reprocessar):
@@ -884,7 +894,13 @@ def processar_arquivos(diretorio_origem, pasta_temp, log_file_path, usuario, sen
     # verificando antes a Reprocessar/ do mês anterior
     if os.path.exists(log_file_path): os.remove(log_file_path)
     data_inicio = datetime.now()  # data/hora de início, usada no assunto/corpo do email
-    resumo = {'sucesso': [], 'ja_existe': [], 'falhas': [], 'erro_fatal': None}  # acumula os resultados da execução para o email
+    # Acumula os resultados da execução para o relatório simples e o email
+    resumo = {
+        'sucesso': [], 'ja_existe': [], 'falhas': [], 'erro_fatal': None,
+        'pasta': None,         # pasta processada (aparece no cabeçalho do relatório)
+        'arquivos': [],        # um item por arquivo, com o resultado de cada loja
+        'fora_do_padrao': [],  # arquivos ignorados por estarem com o nome fora do padrão
+    }
 
     with open(log_file_path, 'a', encoding='utf-8') as log_file:
         log(f"=== INÍCIO DA AUTOMAÇÃO: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ===", log_file, espacamento=True)
@@ -905,6 +921,8 @@ def processar_arquivos(diretorio_origem, pasta_temp, log_file_path, usuario, sen
                 resumo['erro_fatal'] = erro_mes_atual  # aparece no email: a execução agendada não achou a pasta do mês
             if erro_mes_anterior:
                 log(f"[INFO] Reprocessar/ do mês anterior não verificada: {erro_mes_anterior}", log_file)
+
+        resumo['pasta'] = diretorio_origem
 
         global DIRETORIO_ORIGEM, PASTA_TEMP, LOG_FILE_PATH
         DIRETORIO_ORIGEM = diretorio_origem or ""; PASTA_TEMP = pasta_temp; LOG_FILE_PATH = log_file_path
@@ -959,7 +977,7 @@ def processar_arquivos(diretorio_origem, pasta_temp, log_file_path, usuario, sen
             elif not os.path.exists(diretorio_origem):
                 log("[INFO] Diretório de origem não existe mais (nada a processar).", log_file)
             else:
-                arquivos_para_processar = listar_arquivos_para_upload(diretorio_origem, log_file)
+                arquivos_para_processar = listar_arquivos_para_upload(diretorio_origem, log_file, resumo['fora_do_padrao'])
 
                 log(f"Encontrados {len(arquivos_para_processar)} arquivos para processar em '{diretorio_origem}'.", log_file)
 
@@ -1014,6 +1032,14 @@ def processar_arquivos(diretorio_origem, pasta_temp, log_file_path, usuario, sen
                         shutil.move(caminho_original, os.path.join(pasta_reprocessar, nome_arquivo))
                         log(f"[INFO] Arquivo '{nome_arquivo}' movido para Reprocessar/.", log_file)
                         resultados_finais_falhas.append({'arquivo': nome_arquivo, 'motivo': motivo})
+
+                    # Dados do arquivo para o relatório simples: resultado final e o que aconteceu em cada loja
+                    resumo['arquivos'].append({
+                        'arquivo': nome_arquivo,
+                        'resultado': resultado,
+                        'motivo': motivo,
+                        'lojas': lojas_confirmadas_por_arquivo.get(nome_arquivo, {}),
+                    })
         
         except Exception as e:
             log(f"[ERRO FATAL] Ocorreu um erro geral no processo: {e}", log_file, espacamento=True)
@@ -1030,8 +1056,18 @@ def processar_arquivos(diretorio_origem, pasta_temp, log_file_path, usuario, sen
             log(f"=== FIM DA AUTOMAÇÃO: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ===", log_file, espacamento=True)
             if driver: driver.quit()
 
-    # Envio fora do 'with': o log já foi fechado e está completo para ir em anexo
-    if not (parar_event and parar_event.is_set()):  # não envia se o usuário interrompeu (mesma regra do robô do mediador)
-        print("[EMAIL] Enviando relatório da execução...")  # feedback no console
-        enviar_relatorio(resumo, data_inicio, log_file_path)  # nunca levanta exceção; erros vão para o próprio log
+    # Relatório simples (para quem não é da área de TI), gravado ao lado do log técnico.
+    # É ele que vai no email; o log_historico.txt fica só no computador
+    relatorio_path = os.path.join(os.path.dirname(log_file_path), "relatorio.txt")
+    with open(relatorio_path, 'w', encoding='utf-8') as arquivo_relatorio:
+        arquivo_relatorio.write(montar_relatorio(resumo, data_inicio))
+
+    if parar_event and parar_event.is_set():
+        print("[EMAIL] Não enviado: o processo foi interrompido pelo usuário.")
+    elif resumo['erro_fatal'] and not resumo['arquivos']:
+        # O robô não conseguiu rodar (Chrome, login, pasta do mês...) e nenhum arquivo foi processado
+        print("[EMAIL] Não enviado: o robô não conseguiu rodar. Veja o log_historico.txt.")
+    else:
+        print("[EMAIL] Enviando relatório da execução...")
+        enviar_relatorio(resumo, data_inicio, log_file_path, relatorio_path)  # erros do envio vão para o log técnico
     return resultados_finais_falhas  # retorno mantido (lista de falhas) para não mudar o contrato com a interface
