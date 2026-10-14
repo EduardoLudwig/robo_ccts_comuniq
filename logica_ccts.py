@@ -706,6 +706,11 @@ def processar_um_unico_arquivo(driver, wait, nome_arquivo, log_file, lojas_confi
     if not numeros_loja:
         return 'FALHA_MANUAL', "Nenhum número de loja encontrado no nome"
 
+    # O robô só aceita lojas de até 3 dígitos; números maiores na parte das lojas são ignorados (só avisa no log)
+    numeros_ignorados = re.findall(r'\d{4,}', nome_arquivo_limpo.split('_')[0])
+    if numeros_ignorados:
+        log(f"[AVISO] Número(s) com 4 ou mais dígitos na parte das lojas foram ignorados: {', '.join(numeros_ignorados)} (o robô só aceita lojas de até 3 dígitos).", log_file)
+
     caminho_arquivo_preparado = renomear_e_preparar_arquivo(nome_arquivo_completo, nome_arquivo_limpo, log_file, diretorio_override)  # [MUDANÇA - Reorganização de pastas]
     if not caminho_arquivo_preparado:
         return 'FALHA_MANUAL', "Erro ao preparar arquivo (verifique padrão da vigência)"
@@ -799,6 +804,7 @@ def _sessao_morta(erro):
 def processar_pasta_reprocessar(driver, wait, pasta_reprocessar, pasta_sucesso, log_file, usuario, senha, lojas_confirmadas_por_arquivo, resumo, parar_event=None):  # resumo: dict compartilhado com processar_arquivos para o email
     # Devolve (driver, wait): se o navegador for reiniciado aqui dentro, quem chamou precisa continuar com o novo
     if not os.path.exists(pasta_reprocessar):
+        log(f"[INFO] Nada para reprocessar em '{pasta_reprocessar}'.", log_file)
         return driver, wait
 
     arquivos_reprocessar = listar_arquivos_para_upload(pasta_reprocessar, log_file, resumo['fora_do_padrao'])
