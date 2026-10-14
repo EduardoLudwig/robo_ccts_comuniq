@@ -1,0 +1,9 @@
+pyinstaller --noconfirm --clean --onefile --windowed `
+  --name RoboCCTsComuniQ `
+  --icon ccts_icon.ico `
+  --add-data "marsh.json;." `
+  --hidden-import win32timezone `
+  --hidden-import win32com.client `
+  --collect-all selenium `
+  --collect-all webdriver_manager `
+  interface_comuniq_ccts.py
