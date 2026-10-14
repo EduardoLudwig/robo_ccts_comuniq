@@ -79,11 +79,10 @@ garantir_config_inicial()  # garante o config.ini assim que o módulo é importa
 
 ################################################################
 
-LOJAS_POR_REINICIO = 10
+LOJAS_POR_REINICIO = 20  # depois de tantas lojas, reinicia o navegador ENTRE um arquivo e outro (libera memória)
 MAX_REINICIOS_SESSAO = 3  # reinícios por arquivo quando a sessão do navegador cai; depois disso o arquivo vai para Reprocessar/
-
-class ReinicioProgramadoNecessario(Exception):
-    """Sinaliza que o driver deve ser reiniciado (reinício programado a cada N lojas)."""
+MAX_TENTATIVAS_REINICIO = 3  # tentativas para abrir o navegador já logado; se todas falharem, a execução para
+lojas_desde_ultimo_reinicio = 0  # lojas processadas desde que o navegador atual foi aberto (conta a execução inteira)
 
 URL_LOGIN = "https://queroquero.mybeehome.com/login"
 URL_WIKI = "https://queroquero.mybeehome.com/wiki/492/detail"
@@ -654,30 +653,55 @@ def upload_com_verificacao_e_retry(driver, wait, numero_loja_formatado, caminho_
     return 'UPLOAD_NAO_CONFIRMADO'
 
 def _reiniciar_sessao(driver, wait, usuario, senha, log_file):
+    # Fecha o navegador atual (se houver) e abre outro já logado na página de Acordos.
+    # Tenta até MAX_TENTATIVAS_REINICIO vezes; se todas falharem, devolve (None, None)
+    global lojas_desde_ultimo_reinicio
 
     try:
         driver.quit()
     except Exception:
         pass
 
-    driver = inicializar_driver()
-    if not driver:
-        log("[ERRO] Falha ao reinicializar o driver.", log_file)
-        return None, None
+    for tentativa in range(1, MAX_TENTATIVAS_REINICIO + 1):
+        log(f"[INFO] Abrindo o navegador (tentativa {tentativa}/{MAX_TENTATIVAS_REINICIO})...", log_file)
+        novo_driver = inicializar_driver()
 
-    wait = WebDriverWait(driver, 60)
+        if not novo_driver:
+            log("[AVISO] O Chrome não abriu.", log_file)
+        else:
+            novo_wait = WebDriverWait(novo_driver, 60)
+            if not fazer_login(novo_driver, novo_wait, usuario, senha):
+                log("[AVISO] O login no ComuniQ falhou.", log_file)
+            elif not navegar_para_acordos(novo_driver, novo_wait):
+                log("[AVISO] Não foi possível abrir a página de Acordos.", log_file)
+            else:
+                lojas_desde_ultimo_reinicio = 0  # navegador novo: zera a contagem do reinício programado
+                return novo_driver, novo_wait
 
-    if not fazer_login(driver, wait, usuario, senha):
-        log("[ERRO] Falha no login após reinicialização.", log_file)
-        return None, None
+            # Abriu, mas não logou ou não navegou: fecha antes de tentar de novo
+            try:
+                novo_driver.quit()
+            except Exception:
+                pass
 
-    if not navegar_para_acordos(driver, wait):
-        log("[ERRO] Falha na navegação após reinicialização.", log_file)
-        return None, None
+        if tentativa < MAX_TENTATIVAS_REINICIO:
+            time.sleep(10)
 
-    return driver, wait
+    log(f"[ERRO] Não foi possível abrir o navegador após {MAX_TENTATIVAS_REINICIO} tentativas.", log_file)
+    return None, None
+
+def reinicio_programado(driver, wait, usuario, senha, log_file):
+    # Chamado ANTES de cada arquivo: se já passou de LOJAS_POR_REINICIO lojas, reinicia o navegador.
+    # Assim o reinício nunca acontece no meio de um arquivo
+    if lojas_desde_ultimo_reinicio < LOJAS_POR_REINICIO:
+        return driver, wait
+
+    log(f"[INFO] {lojas_desde_ultimo_reinicio} lojas desde o último reinício. Reiniciando o navegador...", log_file, espacamento=True)
+    return _reiniciar_sessao(driver, wait, usuario, senha, log_file)
 
 def processar_um_unico_arquivo(driver, wait, nome_arquivo, log_file, lojas_confirmadas=None, diretorio_override=None):
+    global lojas_desde_ultimo_reinicio
+
     if lojas_confirmadas is None:
         lojas_confirmadas = {}
 
@@ -717,7 +741,6 @@ def processar_um_unico_arquivo(driver, wait, nome_arquivo, log_file, lojas_confi
 
     cidade_loja = extrair_cidade_loja(nome_arquivo_limpo)
 
-    contador_lojas = 0
     try:
         for numero in numeros_loja:
             numero_formatado = numero.zfill(3)
@@ -746,22 +769,16 @@ def processar_um_unico_arquivo(driver, wait, nome_arquivo, log_file, lojas_confi
             else:
                 chave_resultado = 'FALHA_RECUPERAVEL'
 
-            # Guarda TODO resultado (inclusive falhas): após o reinício programado a loja é pulada
-            # em vez de reprocessada, evitando loop infinito quando 10+ lojas falham seguidas
+            # Guarda TODO resultado (inclusive falhas): se o navegador cair e o arquivo for retomado,
+            # as lojas já feitas são puladas em vez de reprocessadas
             lojas_confirmadas[numero_formatado] = chave_resultado
             resultados_lojas[chave_resultado].append(numero_formatado)
 
-            contador_lojas += 1
-            if contador_lojas % LOJAS_POR_REINICIO == 0:
-                log(f"[INFO] {contador_lojas} lojas processadas neste arquivo. Reinício programado do driver...", log_file, espacamento=True)
-                raise ReinicioProgramadoNecessario
-    except ReinicioProgramadoNecessario:
+            lojas_desde_ultimo_reinicio += 1  # usado pelo reinício programado (entre um arquivo e outro)
+    finally:
+        # Apaga o arquivo temporário sempre, mesmo se der erro no meio
         if os.path.exists(caminho_arquivo_preparado):
             os.remove(caminho_arquivo_preparado)
-        raise
-    
-    if os.path.exists(caminho_arquivo_preparado):
-        os.remove(caminho_arquivo_preparado)
 
     # Só vai para Sucesso/ se TODAS as lojas deram certo (sucesso ou já existia).
     # Se alguma falhar, o arquivo vai para Reprocessar/. Na próxima execução, as lojas que já receberam
@@ -828,6 +845,10 @@ def processar_pasta_reprocessar(driver, wait, pasta_reprocessar, pasta_sucesso, 
         caminho_reprocessar = os.path.join(pasta_reprocessar, nome_arquivo)
         resultado, motivo = None, None
 
+        driver, wait = reinicio_programado(driver, wait, usuario, senha, log_file)
+        if not driver:  # o arquivo fica onde está e será tentado na próxima execução
+            raise Exception(f"Não foi possível reiniciar o navegador após {MAX_TENTATIVAS_REINICIO} tentativas.")
+
         tentativas_sessao = 0
         while True:
             try:
@@ -837,14 +858,6 @@ def processar_pasta_reprocessar(driver, wait, pasta_reprocessar, pasta_sucesso, 
                     diretorio_override=pasta_reprocessar
                 )
                 break
-            except ReinicioProgramadoNecessario:
-                log(f"[INFO] Executando reinício programado do driver para '{nome_arquivo}' (reprocessar)...", log_file, espacamento=True)
-                driver, wait = _reiniciar_sessao(driver, wait, usuario, senha, log_file)
-                if not driver:
-                    log("[ERRO] Falha no reinício programado do driver.", log_file)
-                    resultado, motivo = 'FALHA', 'Falha ao reinicializar o driver (reinício programado)'
-                    break
-                continue
             except Exception as e:
                 if _sessao_morta(e):
                     tentativas_sessao += 1
@@ -854,9 +867,8 @@ def processar_pasta_reprocessar(driver, wait, pasta_reprocessar, pasta_sucesso, 
                         break
                     log(f"[AVISO] Sessão do navegador encerrada ao reprocessar '{nome_arquivo}' (tentativa {tentativas_sessao}/{MAX_REINICIOS_SESSAO}). Reinicializando...", log_file)
                     driver, wait = _reiniciar_sessao(driver, wait, usuario, senha, log_file)
-                    if not driver:
-                        resultado, motivo = 'FALHA', 'Erro de sessão durante o reprocessamento'
-                        break
+                    if not driver:  # o arquivo fica onde está e será tentado na próxima execução
+                        raise Exception(f"Não foi possível reiniciar o navegador após {MAX_TENTATIVAS_REINICIO} tentativas.")
                     continue
                 else:
                     log(f"[ERRO FATAL] Erro inesperado ao reprocessar '{nome_arquivo}': {e}", log_file, espacamento=True)
@@ -952,16 +964,10 @@ def processar_arquivos(diretorio_origem, pasta_temp, log_file_path, usuario, sen
         resultados_finais_falhas = resumo['falhas']  # mesma lista do resumo: falhas da pasta de origem e da Reprocessar/ vão juntas para o email
         driver = None
         try:
-            driver = inicializar_driver()
-            if not driver: raise Exception("Falha ao inicializar o Chrome driver.")  # antes era 'return []'; agora cai no except e o erro vai para o email
-
-            wait = WebDriverWait(driver, 60)
-
-            if not fazer_login(driver, wait, usuario, senha):
-                raise Exception("Falha no login.")
-
-            if not navegar_para_acordos(driver, wait):
-                raise Exception("Falha na navegação inicial.")
+            # Abre o navegador já logado na página de Acordos (até MAX_TENTATIVAS_REINICIO tentativas)
+            driver, wait = _reiniciar_sessao(None, None, usuario, senha, log_file)
+            if not driver:
+                raise Exception(f"Não foi possível abrir o navegador e entrar no ComuniQ após {MAX_TENTATIVAS_REINICIO} tentativas.")
 
             lojas_confirmadas_por_arquivo = {}
             if pasta_mes_anterior:  # modo automático: antes do mês atual, tenta de novo o que ficou pendente no mês anterior
@@ -993,20 +999,16 @@ def processar_arquivos(diretorio_origem, pasta_temp, log_file_path, usuario, sen
                     
                     caminho_original = os.path.join(diretorio_origem, nome_arquivo)
                     resultado, motivo = None, None
-                   
+
+                    driver, wait = reinicio_programado(driver, wait, usuario, senha, log_file)
+                    if not driver:  # o arquivo fica onde está e será tentado na próxima execução
+                        raise Exception(f"Não foi possível reiniciar o navegador após {MAX_TENTATIVAS_REINICIO} tentativas.")
+
                     tentativas_sessao = 0
                     while True:
                         try:
                             resultado, motivo = processar_um_unico_arquivo(driver, wait, nome_arquivo, log_file, lojas_confirmadas_por_arquivo.setdefault(nome_arquivo, {}))
                             break
-                        except ReinicioProgramadoNecessario:
-                            log(f"[INFO] Executando reinício programado do driver para '{nome_arquivo}'...", log_file, espacamento=True)
-                            driver, wait = _reiniciar_sessao(driver, wait, usuario, senha, log_file)
-                            if not driver:
-                                log("[ERRO] Falha no reinício programado do driver.", log_file)
-                                resultado, motivo = 'FALHA', 'Falha ao reinicializar o driver (reinício programado)'
-                                break
-                            continue
                         except Exception as e:
                             if _sessao_morta(e):
                                 tentativas_sessao += 1
@@ -1016,9 +1018,8 @@ def processar_arquivos(diretorio_origem, pasta_temp, log_file_path, usuario, sen
                                     break
                                 log(f"[AVISO] Sessão do navegador encerrada ao processar '{nome_arquivo}' (tentativa {tentativas_sessao}/{MAX_REINICIOS_SESSAO}). Reinicializando...", log_file)
                                 driver, wait = _reiniciar_sessao(driver, wait, usuario, senha, log_file)
-                                if not driver:
-                                    resultado, motivo = 'FALHA', 'Erro de sessão durante o processamento'
-                                    break
+                                if not driver:  # o arquivo fica onde está e será tentado na próxima execução
+                                    raise Exception(f"Não foi possível reiniciar o navegador após {MAX_TENTATIVAS_REINICIO} tentativas.")
                                 continue
                             else:
                                 log(f"[ERRO FATAL] Erro inesperado ao processar '{nome_arquivo}': {e}", log_file, espacamento=True)
