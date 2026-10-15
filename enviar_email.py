@@ -1,5 +1,6 @@
 import smtplib
 import os
+import html  # html.escape: evita que caracteres como & e < no nome da pasta quebrem o email
 import configparser
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -82,9 +83,20 @@ def montar_relatorio(resumo, data_ref):
     separador = "-" * 60
     linhas = []
     linhas.append("RELATÓRIO DO ROBÔ CCTs COMUNIQ")
-    linhas.append(f"Data: {data_ref.strftime('%d/%m/%Y às %H:%M')}")
+    linhas.append("Atividade: Envio das Convenções Coletivas de Trabalho para o ComuniQ")
+    linhas.append(f"Data de execução: {data_ref.strftime('%d/%m/%Y às %H:%M')}")
     if resumo.get('pasta'):
-        linhas.append(f"Pasta: {resumo['pasta']}")
+        linhas.append(f"Pasta acessada: {resumo['pasta']}")
+    if resumo.get('pasta_mes_anterior'):
+        linhas.append(f"Pendências do mês anterior: {resumo['pasta_mes_anterior']}")
+
+    if resumo.get('pasta_nao_encontrada'):
+        linhas.append("")
+        linhas.append(f"AVISO: {resumo['pasta_nao_encontrada']}")
+
+    if not resumo.get('arquivos'):
+        linhas.append("")
+        linhas.append("Nenhum arquivo foi processado nesta execução.")
 
     if resumo.get('erro_fatal'):
         motivo_erro = str(resumo['erro_fatal']).split("\n")[0]  # só a 1ª linha: o resto é detalhe técnico
@@ -132,8 +144,27 @@ def montar_relatorio(resumo, data_ref):
 
 ################################################################
 
+def caixa_aviso(texto, cor_borda, cor_fundo):
+    # Caixa colorida usada para os avisos no corpo do email
+    return (
+        f'<div style="border-left: 5px solid {cor_borda}; background-color: {cor_fundo}; '
+        f'padding: 10px 14px; margin: 10px 0; font-size: 14px; color: #333333;">{texto}</div>'
+    )
+
+def linha_resumo(titulo, explicacao, numero, cor):
+    # Uma linha da tabela de resumo: título e explicação à esquerda, número grande à direita
+    return f"""
+      <tr>
+        <td style="padding: 10px 0; border-bottom: 1px solid #eeeeee;">
+          <div style="font-size: 15px; font-weight: bold;">{titulo}</div>
+          <div style="font-size: 13px; color: #666666;">{explicacao}</div>
+        </td>
+        <td style="padding: 10px 0; border-bottom: 1px solid #eeeeee; font-size: 22px; font-weight: bold; text-align: right; color: {cor};">{numero}</td>
+      </tr>"""
+
 def montar_corpo_html(resumo, data_ref):
-    # Corpo do email em HTML: só o resumo (os números). Os detalhes ficam no relatorio.txt em anexo.
+    # Corpo do email em HTML: cabeçalho, pasta acessada e o resumo (os números) com uma explicação em cada um.
+    # Os detalhes de cada arquivo ficam no relatorio.txt em anexo.
     # Os estilos vão dentro de cada tag (style="...") porque os programas de email ignoram CSS separado
     enviados = len(resumo.get('sucesso', []))
     ja_existiam = len(resumo.get('ja_existe', []))
@@ -143,6 +174,7 @@ def montar_corpo_html(resumo, data_ref):
     verde = "#397F5A"  # mesmo verde da interface do robô
     cinza = "#666666"
     laranja = "#D9730D"
+    vermelho = "#C0392B"
 
     # Pendentes e fora do padrão ficam em laranja só quando há algo para a pessoa resolver
     cor_pendentes = cinza
@@ -153,35 +185,53 @@ def montar_corpo_html(resumo, data_ref):
     if fora_do_padrao > 0:
         cor_fora_do_padrao = laranja
 
-    estilo_texto = "padding: 10px 0; border-bottom: 1px solid #eeeeee; font-size: 15px;"
-    estilo_numero = "padding: 10px 0; border-bottom: 1px solid #eeeeee; font-size: 20px; font-weight: bold; text-align: right;"
+    # Pasta(s) que o robô acessou
+    if resumo.get('pasta'):
+        pastas_html = f"<div>{html.escape(resumo['pasta'])}</div>"
+    else:
+        pastas_html = "<div>Pasta do mês atual não encontrada</div>"
+    if resumo.get('pasta_mes_anterior'):
+        pastas_html += f"<div>{html.escape(resumo['pasta_mes_anterior'])} (pendências do mês anterior)</div>"
+
+    # Avisos que só aparecem quando necessário
+    avisos_html = ""
+    if resumo.get('erro_fatal'):
+        motivo = str(resumo['erro_fatal']).split("\n")[0]  # só a 1ª linha: o resto é detalhe técnico
+        avisos_html += caixa_aviso(f"<b>ATENÇÃO:</b> a execução foi interrompida antes do fim. Motivo: {html.escape(motivo)}", vermelho, "#FDECEA")
+    if not resumo.get('arquivos'):
+        if resumo.get('pasta_nao_encontrada'):
+            avisos_html += caixa_aviso(f"<b>AVISO:</b> {html.escape(resumo['pasta_nao_encontrada'])}. Nenhum arquivo foi processado.", laranja, "#FFF4E5")
+        else:
+            avisos_html += caixa_aviso("Não havia arquivos para processar nesta execução.", cinza, "#F2F2F2")
+
+    # Tabela de resumo
+    tabela = ""
+    tabela += linha_resumo("Arquivos enviados", "Subiram para todas as lojas do arquivo", enviados, verde)
+    tabela += linha_resumo("Já estavam no ComuniQ", "Nada foi enviado: o arquivo já existia nas lojas", ja_existiam, cinza)
+    tabela += linha_resumo("Pendentes", "Alguma loja falhou; o arquivo será tentado de novo na próxima execução", pendentes, cor_pendentes)
+    tabela += linha_resumo("Com o nome fora do padrão", "Não foram enviados por causa do nome do arquivo", fora_do_padrao, cor_fora_do_padrao)
+    if fora_do_padrao > 0:
+        aviso = (
+            "<b>ATENÇÃO:</b> há arquivos com o nome fora do padrão. Revise a pasta e renomeie no padrão "
+            "<b>lojas_cidade_sindicato_vigência</b> (exemplo: 160,310_LAJEADO_SIND0088_2026) "
+            "para que sejam enviados na próxima execução. A lista está no relatório em anexo."
+        )
+        tabela += f'<tr><td colspan="2">{caixa_aviso(aviso, laranja, "#FFF4E5")}</td></tr>'
 
     return f"""
-<div style="font-family: Arial, sans-serif; max-width: 560px; border: 1px solid #dddddd;">
+<div style="font-family: Arial, sans-serif; max-width: 600px; border: 1px solid #dddddd;">
   <div style="background-color: {verde}; color: #ffffff; padding: 18px 24px;">
     <div style="font-size: 20px; font-weight: bold;">Relatório do Robô CCTs ComuniQ</div>
-    <div style="font-size: 14px;">Execução de {data_ref.strftime('%d/%m/%Y às %H:%M')}</div>
+    <div style="font-size: 14px; color: #E3F1E8; margin-top: 6px;">Envio das Convenções Coletivas de Trabalho para o ComuniQ</div>
+    <div style="font-size: 14px; color: #E3F1E8;">{data_ref.strftime('%d/%m/%Y às %H:%M')}</div>
   </div>
   <div style="padding: 20px 24px; color: #333333;">
+    <div style="font-size: 13px; color: #666666;">Pasta acessada:</div>
+    <div style="font-size: 13px; margin-bottom: 16px;">{pastas_html}</div>
     <p style="font-size: 15px;">Olá,</p>
     <p style="font-size: 15px;">Segue o resumo da execução. Os detalhes de cada arquivo estão no relatório em anexo.</p>
-    <table style="width: 100%; border-collapse: collapse;">
-      <tr>
-        <td style="{estilo_texto}">Arquivos enviados</td>
-        <td style="{estilo_numero} color: {verde};">{enviados}</td>
-      </tr>
-      <tr>
-        <td style="{estilo_texto}">Já estavam no ComuniQ</td>
-        <td style="{estilo_numero} color: {cinza};">{ja_existiam}</td>
-      </tr>
-      <tr>
-        <td style="{estilo_texto}">Pendentes (serão tentados de novo)</td>
-        <td style="{estilo_numero} color: {cor_pendentes};">{pendentes}</td>
-      </tr>
-      <tr>
-        <td style="{estilo_texto}">Com o nome fora do padrão</td>
-        <td style="{estilo_numero} color: {cor_fora_do_padrao};">{fora_do_padrao}</td>
-      </tr>
+    {avisos_html}
+    <table style="width: 100%; border-collapse: collapse;">{tabela}
     </table>
     <p style="font-size: 15px; margin-top: 24px;">Att,<br>Robô CCTs ComuniQ</p>
   </div>

@@ -269,7 +269,7 @@ def criar_loja_no_comuniq(driver, wait, nome_loja, log_file):
         botao_salvar.click()
         log(f"[DEBUG] Página '{nome_loja}' salva; aguardando aparecimento na lista de acordos...", log_file)
 
-        if not navegar_para_acordos(driver, wait):
+        if not navegar_para_acordos(driver, wait, log_file):
             return 'FALHA_CRIACAO_LOJA'
 
         confirmacao_xpath = f"//span[contains(@class, 'mdc-button__label') and contains(normalize-space(.), '{nome_loja}')]"
@@ -371,20 +371,25 @@ def fazer_login(driver, wait, usuario, senha):
         print(f"Erro durante o login: {e}")
         return False
 
-def navegar_para_acordos(driver, wait):
+def navegar_para_acordos(driver, wait, log_file=None):
     try:
         driver.get(URL_WIKI)
         remuneracao_toggle = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[@aria-label='Toggle Remuneração CS']")))
-        remuneracao_toggle.click()
+        clicar_fechando_popup(driver, remuneracao_toggle, log_file)
         print("Clicou no Toggle Remuneração CS")
         acordos_toggle = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[@aria-label='Toggle Acordos e Convenções Coletivas']")))
-        acordos_toggle.click()
+        clicar_fechando_popup(driver, acordos_toggle, log_file)
         print("Clicou no Toggle Acordos e Convenções Coletivas")
         driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", acordos_toggle)
         print("Scroll realizado para a seção de Acordos.")
         return True
     except Exception as e:
-        print(f"Erro ao navegar para a seção de acordos: {e}")
+        erro = str(e).split("\n")[0]  # só a 1ª linha: o resto é o rastro técnico do Selenium
+        erro = erro.replace("Message:", "").strip()  # o Selenium começa toda mensagem com "Message:"
+        if log_file:
+            log(f"[DEBUG] Erro ao abrir a página de Acordos: {type(e).__name__}: {erro}", log_file)
+        else:
+            print(f"Erro ao navegar para a seção de acordos: {e}")
         return False
 
 def mover_e_renomear_arquivo(caminho_arquivo_original, pasta_destino, sufixo_tag, log_file):
@@ -428,16 +433,20 @@ def fechar_popup_do_site(driver, log_file):
         driver.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
         time.sleep(1)
 
+def clicar_fechando_popup(driver, elemento, log_file):
+    # Clica no elemento; se um pop-up do site estiver na frente, fecha e clica de novo
+    try:
+        elemento.click()
+    except ElementClickInterceptedException:
+        fechar_popup_do_site(driver, log_file)
+        elemento.click()
+
 def abrir_edicao_da_loja(driver, wait, numero_loja_formatado, nome_loja=None, log_file=None):
     try:
         loja_xpath = f"//span[contains(@class, 'mdc-button__label') and starts-with(normalize-space(.), '{numero_loja_formatado}')]"
         elemento_loja = wait.until(EC.element_to_be_clickable((By.XPATH, loja_xpath)))
         driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", elemento_loja)
-        try:
-            elemento_loja.click()
-        except ElementClickInterceptedException:  # o clique foi bloqueado por algo na frente (pop-up)
-            fechar_popup_do_site(driver, log_file)
-            elemento_loja.click()
+        clicar_fechando_popup(driver, elemento_loja, log_file)
     except TimeoutException:
         if not (carregar_flag_criar_loja() and nome_loja and log_file):
             return 'LOJA_NAO_ENCONTRADA'
@@ -538,7 +547,7 @@ def upload_arquivo_para_loja(driver, wait, numero_loja_formatado, caminho_arquiv
         nome_normalizado_alvo = normalizar(nome_final_alvo)
         if any(normalizar(ex) == nome_normalizado_alvo for ex in nomes_existentes):
             log(f"[SKIP] '{nome_final_alvo}' (normalizado: '{nome_normalizado_alvo}') ja existe na loja {numero_loja_formatado}. Pulando upload.", log_file)
-            navegar_para_acordos(driver, wait)
+            navegar_para_acordos(driver, wait, log_file)
             return 'JA_EXISTE'
         
         input_alvo.send_keys(caminho_arquivo_completo)
@@ -614,15 +623,15 @@ def upload_arquivo_para_loja(driver, wait, numero_loja_formatado, caminho_arquiv
         except TimeoutException:
             log(f"[AVISO] Botão 'Ações' não reapareceu em 15s na loja {numero_loja_formatado}; reabrindo a loja para conferir.", log_file)
 
-        navegar_para_acordos(driver, wait)
+        navegar_para_acordos(driver, wait, log_file)
         if abrir_edicao_da_loja(driver, wait, numero_loja_formatado, nome_loja, log_file) == 'OK':
             anexos_salvos = obter_anexos_salvos(driver, wait, log_file)
             contagem_depois = len(anexos_salvos)
             if contagem_depois > contagem_antes:
-                navegar_para_acordos(driver, wait)
+                navegar_para_acordos(driver, wait, log_file)
                 log(f"[SUCESSO CONFIRMADO] '{nome_final_alvo}' salvo na loja {numero_loja_formatado} (anexos: {contagem_antes} → {contagem_depois}).", log_file, registrar_em_arquivo=False)
                 return 'SUCESSO'
-            navegar_para_acordos(driver, wait)
+            navegar_para_acordos(driver, wait, log_file)
             return 'FALHA_VERIFICACAO'
         else:
             return 'FALHA_VERIFICACAO'
@@ -631,7 +640,7 @@ def upload_arquivo_para_loja(driver, wait, numero_loja_formatado, caminho_arquiv
         log(f"[ERRO GERAL] Falha no upload de '{nome_arquivo_original}' para a loja {numero_loja_formatado}. Erro: {e}", log_file)
         driver.get(URL_WIKI)
         wait.until(EC.element_to_be_clickable((By.XPATH, "//button[@aria-label='Toggle Remuneração CS']")))
-        navegar_para_acordos(driver, wait)
+        navegar_para_acordos(driver, wait, log_file)
         return 'FALHA_RECUPERAVEL'
 
 def upload_com_verificacao_e_retry(driver, wait, numero_loja_formatado, caminho_arquivo_completo, log_file, nome_arquivo_original, nome_loja=None):
@@ -672,7 +681,7 @@ def _reiniciar_sessao(driver, wait, usuario, senha, log_file):
             novo_wait = WebDriverWait(novo_driver, 60)
             if not fazer_login(novo_driver, novo_wait, usuario, senha):
                 log("[AVISO] O login no ComuniQ falhou.", log_file)
-            elif not navegar_para_acordos(novo_driver, novo_wait):
+            elif not navegar_para_acordos(novo_driver, novo_wait, log_file):
                 log("[AVISO] Não foi possível abrir a página de Acordos.", log_file)
             else:
                 lojas_desde_ultimo_reinicio = 0  # navegador novo: zera a contagem do reinício programado
@@ -916,6 +925,8 @@ def processar_arquivos(diretorio_origem, pasta_temp, log_file_path, usuario, sen
     resumo = {
         'sucesso': [], 'ja_existe': [], 'falhas': [], 'erro_fatal': None,
         'pasta': None,         # pasta processada (aparece no cabeçalho do relatório)
+        'pasta_mes_anterior': None,    # Reprocessar/ do mês anterior, quando havia pendências lá
+        'pasta_nao_encontrada': None,  # motivo, quando a pasta do mês atual não foi encontrada (modo automático)
         'arquivos': [],        # um item por arquivo, com o resultado de cada loja
         'fora_do_padrao': [],  # arquivos ignorados por estarem com o nome fora do padrão
     }
@@ -936,11 +947,12 @@ def processar_arquivos(diretorio_origem, pasta_temp, log_file_path, usuario, sen
             pasta_mes_anterior, erro_mes_anterior = encontrar_pasta_mes(ano_anterior, mes_anterior)
             if erro_mes_atual:
                 log(f"[ERRO] {erro_mes_atual}", log_file)
-                resumo['erro_fatal'] = erro_mes_atual  # aparece no email: a execução agendada não achou a pasta do mês
+                resumo['pasta_nao_encontrada'] = erro_mes_atual  # o email é enviado avisando que nada foi processado
             if erro_mes_anterior:
                 log(f"[INFO] Reprocessar/ do mês anterior não verificada: {erro_mes_anterior}", log_file)
 
-        resumo['pasta'] = diretorio_origem
+        if diretorio_origem:
+            resumo['pasta'] = os.path.normpath(diretorio_origem)  # normpath: mostra o caminho com '\' no email
 
         global DIRETORIO_ORIGEM, PASTA_TEMP, LOG_FILE_PATH
         DIRETORIO_ORIGEM = diretorio_origem or ""; PASTA_TEMP = pasta_temp; LOG_FILE_PATH = log_file_path
@@ -961,13 +973,22 @@ def processar_arquivos(diretorio_origem, pasta_temp, log_file_path, usuario, sen
 
             os.makedirs(pasta_sucesso, exist_ok=True)
 
+        # Pendências do mês anterior (aparece no email como pasta acessada)
+        if pasta_mes_anterior and os.path.exists(os.path.join(pasta_mes_anterior, nome_pasta_reprocessar)):
+            resumo['pasta_mes_anterior'] = os.path.normpath(os.path.join(pasta_mes_anterior, nome_pasta_reprocessar))
+
         resultados_finais_falhas = resumo['falhas']  # mesma lista do resumo: falhas da pasta de origem e da Reprocessar/ vão juntas para o email
         driver = None
+        wait = None
         try:
-            # Abre o navegador já logado na página de Acordos (até MAX_TENTATIVAS_REINICIO tentativas)
-            driver, wait = _reiniciar_sessao(None, None, usuario, senha, log_file)
-            if not driver:
-                raise Exception(f"Não foi possível abrir o navegador e entrar no ComuniQ após {MAX_TENTATIVAS_REINICIO} tentativas.")
+            if not diretorio_origem and not resumo['pasta_mes_anterior']:
+                # Sem pasta do mês atual e sem pendências do mês anterior: não há o que fazer no ComuniQ
+                log("[INFO] Nada para processar: sem pasta do mês atual e sem pendências do mês anterior. O navegador não será aberto.", log_file)
+            else:
+                # Abre o navegador já logado na página de Acordos (até MAX_TENTATIVAS_REINICIO tentativas)
+                driver, wait = _reiniciar_sessao(None, None, usuario, senha, log_file)
+                if not driver:
+                    raise Exception(f"Não foi possível abrir o navegador e entrar no ComuniQ após {MAX_TENTATIVAS_REINICIO} tentativas.")
 
             lojas_confirmadas_por_arquivo = {}
             if pasta_mes_anterior:  # modo automático: antes do mês atual, tenta de novo o que ficou pendente no mês anterior
