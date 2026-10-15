@@ -77,10 +77,54 @@ def mensagem_da_loja(resultado):
 
 ################################################################
 
+SEPARADOR = "=" * 60  # linha que separa uma seção da outra no relatorio.txt
+
+def linha_com_pontos(texto, numero):
+    # Linha do resumo, ex.: "   Arquivos enviados ...................... 2"
+    pontos = "." * (40 - len(texto))
+    return f"   {texto} {pontos} {numero}"
+
+def linhas_do_arquivo(item):
+    # Nome do arquivo e, logo abaixo, o que aconteceu em cada loja
+    linhas = [item['arquivo']]
+    for loja in item['lojas']:
+        linhas.append(f"   Loja {loja}: {mensagem_da_loja(item['lojas'][loja])}")
+    if not item['lojas']:  # falhou antes de chegar nas lojas
+        motivo = str(item['motivo']).split("\n")[0]  # só a 1ª linha: o resto é detalhe técnico
+        linhas.append(f"   NÃO ENVIADO - {motivo}")
+    linhas.append("")
+    return linhas
+
+def linhas_da_secao(titulo, explicacao, itens):
+    # Uma seção: título com a quantidade, a explicação e os arquivos logo abaixo
+    linhas = [SEPARADOR, f"{titulo} ({len(itens)})"]
+    linhas.extend(explicacao)
+    linhas.append("")
+    if not itens:
+        linhas.append("Nenhum arquivo.")
+        linhas.append("")
+    for item in itens:
+        linhas.extend(linhas_do_arquivo(item))
+    return linhas
+
 def montar_relatorio(resumo, data_ref):
-    # Relatório para quem não é da área de TI: vai no corpo do email e no anexo relatorio.txt.
+    # Relatório para quem não é da área de TI, enviado em anexo (relatorio.txt), separado por seções.
     # Os detalhes técnicos ficam só no log_historico.txt
-    separador = "-" * 60
+
+    # Separa os arquivos processados pelo resultado final
+    enviados = []
+    ja_existiam = []
+    pendentes = []
+    for item in resumo.get('arquivos', []):
+        if item['resultado'] == 'SUCESSO':
+            enviados.append(item)
+        elif item['resultado'] == 'JA_EXISTE':
+            ja_existiam.append(item)
+        else:
+            pendentes.append(item)
+    fora_do_padrao = resumo.get('fora_do_padrao', [])
+
+    # Cabeçalho
     linhas = []
     linhas.append("RELATÓRIO DO ROBÔ CCTs COMUNIQ")
     linhas.append("Atividade: Envio das Convenções Coletivas de Trabalho para o ComuniQ")
@@ -89,57 +133,56 @@ def montar_relatorio(resumo, data_ref):
         linhas.append(f"Pasta acessada: {resumo['pasta']}")
     if resumo.get('pasta_mes_anterior'):
         linhas.append(f"Pendências do mês anterior: {resumo['pasta_mes_anterior']}")
+    linhas.append("")
 
+    # Avisos, logo abaixo do cabeçalho
     if resumo.get('pasta_nao_encontrada'):
-        linhas.append("")
         linhas.append(f"AVISO: {resumo['pasta_nao_encontrada']}")
-
-    if not resumo.get('arquivos'):
         linhas.append("")
+    if not resumo.get('arquivos'):
         linhas.append("Nenhum arquivo foi processado nesta execução.")
-
+        linhas.append("")
     if resumo.get('erro_fatal'):
         motivo_erro = str(resumo['erro_fatal']).split("\n")[0]  # só a 1ª linha: o resto é detalhe técnico
-        linhas.append("")
         linhas.append("ATENÇÃO: o robô não conseguiu concluir o trabalho.")
         linhas.append(f"Motivo: {motivo_erro}")
-
-    for item in resumo.get('arquivos', []):
         linhas.append("")
-        linhas.append(separador)
-        linhas.append(f"Arquivo: {item['arquivo']}")
 
-        for loja in item['lojas']:
-            linhas.append(f"   Loja {loja}: {mensagem_da_loja(item['lojas'][loja])}")
-
-        if item['resultado'] == 'SUCESSO':
-            linhas.append("   Situação: CONCLUÍDO. O arquivo foi movido para a pasta Sucesso.")
-        elif item['resultado'] == 'JA_EXISTE':
-            linhas.append("   Situação: JÁ ESTAVA NO COMUNIQ. O arquivo foi movido para a pasta Sucesso.")
-        else:
-            if not item['lojas']:  # falhou antes de chegar nas lojas
-                motivo_arquivo = str(item['motivo']).split("\n")[0]
-                linhas.append(f"   NÃO ENVIADO - {motivo_arquivo}")
-            linhas.append("   Situação: PENDENTE. O arquivo está na pasta Reprocessar e será")
-            linhas.append("   tentado de novo na próxima execução.")
-
-    fora_do_padrao = resumo.get('fora_do_padrao', [])
-    if fora_do_padrao:
-        linhas.append("")
-        linhas.append(separador)
-        linhas.append("ARQUIVOS NÃO ENVIADOS POR ESTAREM COM O NOME FORA DO PADRÃO")
-        linhas.append("Para serem enviados, precisam ser renomeados no padrão:")
-        linhas.append("lojas_cidade_sindicato_vigência (exemplo: 160,310_LAJEADO_SIND0088_2026)")
-        for nome in fora_do_padrao:
-            linhas.append(f"   - {nome}")
-
-    linhas.append("")
-    linhas.append(separador)
+    # Resumo
+    linhas.append(SEPARADOR)
     linhas.append("RESUMO")
-    linhas.append(f"   Arquivos concluídos: {len(resumo.get('sucesso', []))}")
-    linhas.append(f"   Arquivos que já estavam no ComuniQ: {len(resumo.get('ja_existe', []))}")
-    linhas.append(f"   Arquivos pendentes: {len(resumo.get('falhas', []))}")
-    linhas.append(f"   Arquivos com o nome fora do padrão: {len(fora_do_padrao)}")
+    linhas.append(linha_com_pontos("Arquivos enviados", len(enviados)))
+    linhas.append(linha_com_pontos("Já estavam no ComuniQ", len(ja_existiam)))
+    linhas.append(linha_com_pontos("Pendentes", len(pendentes)))
+    linhas.append(linha_com_pontos("Com o nome fora do padrão", len(fora_do_padrao)))
+    linhas.append("")
+
+    # Seções
+    linhas.extend(linhas_da_secao(
+        "ARQUIVOS ENVIADOS",
+        ["Subiram para todas as lojas e foram movidos para a pasta Sucesso."],
+        enviados))
+    linhas.extend(linhas_da_secao(
+        "JÁ ESTAVAM NO COMUNIQ",
+        ["O arquivo já existia em todas as lojas; nada foi enviado."],
+        ja_existiam))
+    linhas.extend(linhas_da_secao(
+        "PENDENTES",
+        ["Alguma loja falhou. O arquivo está na pasta Reprocessar e será",
+         "tentado de novo na próxima execução."],
+        pendentes))
+
+    # Nome fora do padrão (aqui são só nomes de arquivo, sem lojas)
+    linhas.append(SEPARADOR)
+    linhas.append(f"NOME FORA DO PADRÃO ({len(fora_do_padrao)})")
+    linhas.append("Não foram enviados. Renomeie no padrão lojas_cidade_sindicato_vigência")
+    linhas.append("(exemplo: 160,310_LAJEADO_SIND0088_2026) para que sejam enviados.")
+    linhas.append("")
+    if not fora_do_padrao:
+        linhas.append("Nenhum arquivo.")
+    for nome in fora_do_padrao:
+        linhas.append(f"   - {nome}")
+
     return "\n".join(linhas)
 
 ################################################################
