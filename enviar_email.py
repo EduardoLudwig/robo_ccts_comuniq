@@ -144,23 +144,30 @@ def montar_relatorio(resumo, data_ref):
 
 ################################################################
 
+# O HTML do email é montado com TABELAS (e não <div>) porque o Outlook para Windows usa o motor do Word,
+# que ignora largura, fundo e espaçamento em <div>. Tabelas funcionam no Outlook, no Gmail e no celular.
+# A fonte é repetida em cada célula porque o Outlook não herda a fonte da tabela de fora.
+FONTE = "font-family: Arial, sans-serif;"
+
 def caixa_aviso(texto, cor_borda, cor_fundo):
-    # Caixa colorida usada para os avisos no corpo do email
-    return (
-        f'<div style="border-left: 5px solid {cor_borda}; background-color: {cor_fundo}; '
-        f'padding: 10px 14px; margin: 10px 0; font-size: 14px; color: #333333;">{texto}</div>'
-    )
+    # Caixa colorida usada para os avisos no corpo do email (tabela de uma célula)
+    return f"""
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+        <tr>
+          <td bgcolor="{cor_fundo}" style="background-color: {cor_fundo}; border-left: 5px solid {cor_borda}; padding: 10px 14px; {FONTE} font-size: 14px; color: #333333;">{texto}</td>
+        </tr>
+      </table>"""
 
 def linha_resumo(titulo, explicacao, numero, cor):
     # Uma linha da tabela de resumo: título e explicação à esquerda, número grande à direita
     return f"""
-      <tr>
-        <td style="padding: 10px 0; border-bottom: 1px solid #eeeeee;">
-          <div style="font-size: 15px; font-weight: bold;">{titulo}</div>
-          <div style="font-size: 13px; color: #666666;">{explicacao}</div>
-        </td>
-        <td style="padding: 10px 0; border-bottom: 1px solid #eeeeee; font-size: 22px; font-weight: bold; text-align: right; color: {cor};">{numero}</td>
-      </tr>"""
+        <tr>
+          <td style="padding: 10px 0; border-bottom: 1px solid #eeeeee; {FONTE}">
+            <div style="font-size: 15px; font-weight: bold; color: #333333;">{titulo}</div>
+            <div style="font-size: 13px; color: #666666;">{explicacao}</div>
+          </td>
+          <td width="60" align="right" style="padding: 10px 0; border-bottom: 1px solid #eeeeee; {FONTE} font-size: 22px; font-weight: bold; color: {cor};">{numero}</td>
+        </tr>"""
 
 def montar_corpo_html(resumo, data_ref):
     # Corpo do email em HTML: cabeçalho, pasta acessada e o resumo (os números) com uma explicação em cada um.
@@ -216,26 +223,32 @@ def montar_corpo_html(resumo, data_ref):
             "<b>lojas_cidade_sindicato_vigência</b> (exemplo: 160,310_LAJEADO_SIND0088_2026) "
             "para que sejam enviados na próxima execução. A lista está no relatório em anexo."
         )
-        tabela += f'<tr><td colspan="2">{caixa_aviso(aviso, laranja, "#FFF4E5")}</td></tr>'
+        tabela += f'<tr><td colspan="2" style="padding: 8px 0;">{caixa_aviso(aviso, laranja, "#FFF4E5")}</td></tr>'
 
+    # width="600" é a largura que o Outlook respeita (não estica até a janela);
+    # max-width: 100% deixa os outros programas e o celular encolherem quando a tela for menor
     return f"""
-<div style="font-family: Arial, sans-serif; max-width: 600px; border: 1px solid #dddddd;">
-  <div style="background-color: {verde}; color: #ffffff; padding: 18px 24px;">
-    <div style="font-size: 20px; font-weight: bold;">Relatório do Robô CCTs ComuniQ</div>
-    <div style="font-size: 14px; color: #E3F1E8; margin-top: 6px;">Envio das Convenções Coletivas de Trabalho para o ComuniQ</div>
-    <div style="font-size: 14px; color: #E3F1E8;">{data_ref.strftime('%d/%m/%Y às %H:%M')}</div>
-  </div>
-  <div style="padding: 20px 24px; color: #333333;">
-    <div style="font-size: 13px; color: #666666;">Pasta acessada:</div>
-    <div style="font-size: 13px; margin-bottom: 16px;">{pastas_html}</div>
-    <p style="font-size: 15px;">Olá,</p>
-    <p style="font-size: 15px;">Segue o resumo da execução. Os detalhes de cada arquivo estão no relatório em anexo.</p>
-    {avisos_html}
-    <table style="width: 100%; border-collapse: collapse;">{tabela}
-    </table>
-    <p style="font-size: 15px; margin-top: 24px;">Att,<br>Robô CCTs ComuniQ</p>
-  </div>
-</div>
+<table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="width: 600px; max-width: 100%; border: 1px solid #dddddd;">
+  <tr>
+    <td bgcolor="{verde}" style="background-color: {verde}; padding: 18px 24px; {FONTE}">
+      <div style="font-size: 20px; font-weight: bold; color: #ffffff;">Relatório do Robô CCTs ComuniQ</div>
+      <div style="font-size: 14px; color: #E3F1E8; padding-top: 6px;">Envio das Convenções Coletivas de Trabalho para o ComuniQ</div>
+      <div style="font-size: 14px; color: #E3F1E8;">{data_ref.strftime('%d/%m/%Y às %H:%M')}</div>
+    </td>
+  </tr>
+  <tr>
+    <td style="padding: 20px 24px; {FONTE} color: #333333;">
+      <div style="font-size: 13px; color: #666666;">Pasta acessada:</div>
+      <div style="font-size: 13px; color: #333333;">{pastas_html}</div>
+      <p style="margin: 16px 0 8px 0; font-size: 15px; color: #333333;">Olá,</p>
+      <p style="margin: 0 0 12px 0; font-size: 15px; color: #333333;">Segue o resumo da execução. Os detalhes de cada arquivo estão no relatório em anexo.</p>
+      {avisos_html}
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">{tabela}
+      </table>
+      <p style="margin: 24px 0 0 0; font-size: 15px; color: #333333;">Att,<br>Robô CCTs ComuniQ</p>
+    </td>
+  </tr>
+</table>
 """
 
 ################################################################
