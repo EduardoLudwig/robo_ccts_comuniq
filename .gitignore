@@ -5,6 +5,7 @@
 __pycache__/
 /temp_upload/
 log_historico.txt
+/Logs/
 
 ideias.txt
 /assets

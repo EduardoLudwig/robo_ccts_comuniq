@@ -83,9 +83,13 @@ LOJAS_POR_REINICIO = 20  # depois de tantas lojas, reinicia o navegador ENTRE um
 MAX_REINICIOS_SESSAO = 3  # reinícios por arquivo quando a sessão do navegador cai; depois disso o arquivo vai para Reprocessar/
 MAX_TENTATIVAS_REINICIO = 3  # tentativas para abrir o navegador já logado; se todas falharem, a execução para
 lojas_desde_ultimo_reinicio = 0  # lojas processadas desde que o navegador atual foi aberto (conta a execução inteira)
+lojas_criadas_na_execucao = []  # lojas criadas pelo robô nesta execução, ex.: {'numero': '999', 'nome': '999 - TESTE'}
 
 URL_LOGIN = "https://queroquero.mybeehome.com/login"
 URL_WIKI = "https://queroquero.mybeehome.com/wiki/492/detail"
+# Página "Remuneração (C&S)", onde se cria a loja. Só serve para CONFERIR que o robô chegou nela:
+# abrir esse endereço direto dá "Acesso negado" ao criar a loja (o site exige chegar navegando por dentro dele)
+CAMINHO_CATEGORIA_REMUNERACAO = "/wiki/130/category"
 SECAO_ACORDOS = "Acordos e Convenções Coletivas"
 DIRETORIO_ORIGEM = ""
 PASTA_TEMP = ""
@@ -93,16 +97,47 @@ LOG_FILE_PATH = ""
 
 def log(message, log_file, espacamento=False, registrar_em_arquivo=True):
     try:
+        horario = datetime.now().strftime("%H:%M:%S")  # horário em cada linha: mostra onde estão as demoras
         if espacamento:
-            log_message = "\n" + "-" * 80 + "\n" + message.strip() + "\n"
+            log_message = "\n" + "-" * 80 + "\n" + f"{horario} {message.strip()}" + "\n"
         else:
-            log_message = message.strip()
+            log_message = f"{horario} {message.strip()}"
         print(log_message)
         if registrar_em_arquivo:
             log_file.write(log_message + "\n")
             log_file.flush()
     except Exception as e:
         print(f"[ERRO] Falha ao escrever no log: {e}")
+
+def resumir_erro(e):
+    # Tipo do erro + 1ª linha da mensagem, sem o rastro técnico do Selenium ("Stacktrace", "No symbol"...).
+    # Ex.: "TimeoutException" (tempo esgotado) ou "ElementClickInterceptedException: element click intercepted..."
+    primeira_linha = str(e).split("\n")[0].replace("Message:", "").strip()
+    if primeira_linha:
+        return f"{type(e).__name__}: {primeira_linha}"
+    return type(e).__name__
+
+MAX_LOGS_GUARDADOS = 30
+
+def arquivar_log_anterior(log_file_path):
+    # Em vez de apagar o log da execução anterior, guarda uma cópia na pasta "Logs" ao lado dele,
+    # mantendo só os 30 mais recentes. Assim dá para investigar problemas de execuções passadas
+    if not os.path.exists(log_file_path):
+        return
+    try:
+        pasta_logs = os.path.join(os.path.dirname(log_file_path), "Logs")
+        os.makedirs(pasta_logs, exist_ok=True)
+        data_do_log = datetime.fromtimestamp(os.path.getmtime(log_file_path)).strftime("%Y-%m-%d_%H-%M-%S")
+        shutil.move(log_file_path, os.path.join(pasta_logs, f"log_{data_do_log}.txt"))
+
+        # O nome começa pela data (ano-mês-dia), então a ordem alfabética é a ordem cronológica
+        logs = sorted(os.listdir(pasta_logs))
+        while len(logs) > MAX_LOGS_GUARDADOS:
+            os.remove(os.path.join(pasta_logs, logs.pop(0)))  # apaga o mais antigo
+    except Exception as e:
+        print(f"[AVISO] Não foi possível guardar o log anterior: {e}")
+        if os.path.exists(log_file_path):
+            os.remove(log_file_path)
 
 def converter_doc_para_pdf(caminho_arquivo, diretorio_saida, log_file):
     word = None; doc = None
@@ -138,7 +173,12 @@ def carregar_flag_criar_loja():
 
 def extrair_cidade_loja(nome_arquivo_limpo):
     partes = nome_arquivo_limpo.split('_')
-    return partes[1] if len(partes) > 1 and partes[1] else None
+    if len(partes) < 2:
+        return None
+    cidade = partes[1].strip()  # strip: "_ TESTE" vira "TESTE" (evita "999 -  TESTE" com espaço duplo)
+    if not cidade:
+        return None
+    return cidade
 
 def montar_nome_loja(numero_formatado, cidade):
     return f"{numero_formatado} - {cidade}" if cidade else numero_formatado
@@ -187,48 +227,83 @@ def listar_arquivos_para_upload(pasta, log_file, fora_do_padrao):
         arquivos.append(f)
     return arquivos
 
-# navegação por cliques até a página de categorias de Acordos 
+def endereco_atual(driver):
+    # Endereço da página atual sem o "?..." do final e sem a "/" final. Ex.: "https://.../wiki"
+    return driver.current_url.split("?")[0].rstrip("/")
+
+def procurar_rolando(driver, xpath, tentativas=10):
+    # Procura um elemento rolando a página aos poucos até o fim (para listas que só aparecem conforme desce).
+    # Devolve o elemento, ou None se não apareceu depois de todas as tentativas (1 por segundo)
+    for _ in range(tentativas):
+        elementos = driver.find_elements(By.XPATH, xpath)
+        if elementos:
+            return elementos[0]
+
+        # Rola até o último título de categoria (funciona mesmo se quem rola é uma parte da página)
+        # e também a janela inteira
+        titulos = driver.find_elements(By.TAG_NAME, "h6")
+        if titulos:
+            driver.execute_script("arguments[0].scrollIntoView({block: 'end'});", titulos[-1])
+        driver.execute_script("window.scrollBy(0, 600);")
+        time.sleep(1)
+    return None
+
+# Navega por cliques até a página da categoria "Remuneração (C&S)", onde fica o botão de criar a página da loja.
+# Precisa ser por cliques: entrando direto pelo endereço, o site nega o acesso ao formulário de criação.
+# Em cada passo, espera a página certa carregar antes de seguir; sem isso, o robô podia achar
+# o "Ver mais" da página anterior e clicar no lugar errado
 def navegar_para_categoria_acordos(driver, wait, log_file):
     log("[CRIACAO] Navegando até a página de categorias de Acordos...", log_file)
 
-    # Sidebar → "Biblioteca do Conhecimento"
+    # Passo 1: menu lateral → "Biblioteca do Conhecimento" e espera o endereço virar ".../wiki"
     link_biblioteca = wait.until(EC.presence_of_element_located(
         (By.XPATH, "//a[@href='/wiki']//span[normalize-space(.)='Biblioteca do Conhecimento']/ancestor::a")
     ))
     driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", link_biblioteca)
-    link_biblioteca.click()
-    log("[CRIACAO] Passo 1/5: Clicou em 'Biblioteca do Conhecimento'.", log_file)
+    clicar_fechando_popup(driver, link_biblioteca, log_file)
+    WebDriverWait(driver, 20).until(lambda d: endereco_atual(d).endswith("/wiki"))
+    log("[CRIACAO] Passo 1/5: Abriu a 'Biblioteca do Conhecimento'.", log_file)
 
-    # Clica em "Ver mais" (pelo texto exato do link)
-    botao_ver_mais = wait.until(EC.presence_of_element_located(
+    # Passo 2: "Ver mais" (é o único da página). Espera ficar clicável, rola até ele e espera 2s
+    # para a Biblioteca terminar de carregar: clicando cedo demais, a lista de categorias não abre
+    botao_ver_mais = WebDriverWait(driver, 20).until(EC.element_to_be_clickable(
         (By.XPATH, "//a[normalize-space(.)='Ver mais']")
     ))
     driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", botao_ver_mais)
-    driver.execute_script("arguments[0].click();", botao_ver_mais)
+    time.sleep(2)
+    clicar_fechando_popup(driver, botao_ver_mais, log_file)  # clique normal, como uma pessoa
     log("[CRIACAO] Passo 2/5: Clicou em 'Ver mais'.", log_file)
 
-    # Clica no h6 "Remuneração (C&S)" que direciona para a página /wiki/130/category
-    texto_remuneracao = wait.until(EC.presence_of_element_located(
-        (By.XPATH, "//h6[normalize-space(.)='Remuneração (C&S)']")
-    ))
+    # Passo 3: procura "Remuneração (C&S)" rolando a página até o fim
+    texto_remuneracao = procurar_rolando(driver, "//h6[normalize-space(.)='Remuneração (C&S)']")
+    if not texto_remuneracao:
+        # Registra o que apareceu, para saber se o "Ver mais" não abriu nada ou se o nome está diferente
+        titulos = []
+        for titulo in driver.find_elements(By.TAG_NAME, "h6"):
+            if titulo.text.strip():
+                titulos.append(titulo.text.strip())
+        log(f"[DEBUG] {len(titulos)} título(s) de categoria na página: {titulos[:20]}", log_file)
+        raise Exception("'Remuneração (C&S)' não apareceu depois de clicar em 'Ver mais'.")
+    log("[CRIACAO] Encontrou 'Remuneração (C&S)'.", log_file)
     driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", texto_remuneracao)
     driver.execute_script("arguments[0].click();", texto_remuneracao)
-    log("[CRIACAO] Passo 3/5: Clicou em 'Remuneração (C&S)'.", log_file)
+    WebDriverWait(driver, 20).until(lambda d: endereco_atual(d).endswith(CAMINHO_CATEGORIA_REMUNERACAO))
+    log("[CRIACAO] Passo 3/5: Abriu a categoria 'Remuneração (C&S)'.", log_file)
 
-    # Toggle "Remuneração CS" na página de categoria
+    # Passo 4: toggle "Remuneração CS"
     toggle_remuneracao = wait.until(EC.element_to_be_clickable(
         (By.XPATH, "//button[@aria-label='Toggle Remuneração CS']")
     ))
     driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", toggle_remuneracao)
-    toggle_remuneracao.click()
+    clicar_fechando_popup(driver, toggle_remuneracao, log_file)
     log("[CRIACAO] Passo 4/5: Expandiu toggle 'Remuneração CS'.", log_file)
 
-    # Toggle "Acordos e Convenções Coletivas"
+    # Passo 5: toggle "Acordos e Convenções Coletivas"
     toggle_acordos = wait.until(EC.element_to_be_clickable(
         (By.XPATH, "//button[@aria-label='Toggle Acordos e Convenções Coletivas']")
     ))
     driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", toggle_acordos)
-    toggle_acordos.click()
+    clicar_fechando_popup(driver, toggle_acordos, log_file)
     log("[CRIACAO] Passo 5/5: Expandiu toggle 'Acordos e Convenções Coletivas'.", log_file)
 
     return True
@@ -249,11 +324,12 @@ def criar_loja_no_comuniq(driver, wait, nome_loja, log_file):
         wait.until(EC.visibility_of_element_located((By.XPATH, f"//span[contains(@class,'mdc-button__label') and normalize-space(.)='{SECAO_ACORDOS}']")))
         botao_criar = wait.until(EC.element_to_be_clickable((By.XPATH, seletor_criar_acordos)))
         driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", botao_criar)
-        botao_criar.click()
+        clicar_fechando_popup(driver, botao_criar, log_file)
         log("[CRIACAO] Clicou no botão '+' (criar página) da seção de Acordos.", log_file)
 
         wait.until(EC.visibility_of_element_located((By.XPATH, "//h5[normalize-space()='Escolha o modelo da página']")))
-        wait.until(EC.element_to_be_clickable((By.XPATH, "//h5[normalize-space()='Em branco']/ancestor::div[contains(@class,'card')][1]//button"))).click()
+        botao_em_branco = wait.until(EC.element_to_be_clickable((By.XPATH, "//h5[normalize-space()='Em branco']/ancestor::div[contains(@class,'card')][1]//button")))
+        clicar_fechando_popup(driver, botao_em_branco, log_file)
 
         campo_titulo = wait.until(EC.visibility_of_element_located((By.XPATH, "//input[@formcontrolname='title']")))
         campo_titulo.clear(); campo_titulo.send_keys(nome_loja)
@@ -262,11 +338,12 @@ def criar_loja_no_comuniq(driver, wait, nome_loja, log_file):
         campo_descricao.clear(); campo_descricao.send_keys(nome_loja)
 
         campo_texto = wait.until(EC.element_to_be_clickable((By.XPATH, "//div[contains(@class,'fr-element') and @contenteditable='true']")))
-        campo_texto.click(); campo_texto.send_keys(nome_loja)
+        clicar_fechando_popup(driver, campo_texto, log_file)
+        campo_texto.send_keys(nome_loja)
 
         botao_salvar = wait.until(EC.element_to_be_clickable((By.XPATH, "//div[contains(@class,'footer-bar')]//button[contains(@class,'btn-success')]")))
         driver.execute_script("arguments[0].scrollIntoView(true);", botao_salvar)
-        botao_salvar.click()
+        clicar_fechando_popup(driver, botao_salvar, log_file)
         log(f"[DEBUG] Página '{nome_loja}' salva; aguardando aparecimento na lista de acordos...", log_file)
 
         if not navegar_para_acordos(driver, wait, log_file):
@@ -280,9 +357,12 @@ def criar_loja_no_comuniq(driver, wait, nome_loja, log_file):
             return 'FALHA_CRIACAO_LOJA'
 
         log(f"[SUCESSO] Página da loja '{nome_loja}' criada no ComuniQ.", log_file)
+        # Registra para o relatório (mesmo que o upload do arquivo falhe depois, a página já existe)
+        numero_loja = nome_loja.split(" - ")[0]
+        lojas_criadas_na_execucao.append({'numero': numero_loja, 'nome': nome_loja})
         return 'OK'
     except Exception as e:
-        log(f"[ERRO] Falha ao criar a loja '{nome_loja}'. Erro: {e}", log_file)
+        log(f"[ERRO] Falha ao criar a loja '{nome_loja}'. Erro: {resumir_erro(e)}", log_file)
         return 'FALHA_CRIACAO_LOJA'
 
 def normalizar(nome):
@@ -384,10 +464,8 @@ def navegar_para_acordos(driver, wait, log_file=None):
         print("Scroll realizado para a seção de Acordos.")
         return True
     except Exception as e:
-        erro = str(e).split("\n")[0]  # só a 1ª linha: o resto é o rastro técnico do Selenium
-        erro = erro.replace("Message:", "").strip()  # o Selenium começa toda mensagem com "Message:"
         if log_file:
-            log(f"[DEBUG] Erro ao abrir a página de Acordos: {type(e).__name__}: {erro}", log_file)
+            log(f"[DEBUG] Erro ao abrir a página de Acordos: {resumir_erro(e)}", log_file)
         else:
             print(f"Erro ao navegar para a seção de acordos: {e}")
         return False
@@ -439,12 +517,37 @@ def clicar_fechando_popup(driver, elemento, log_file):
         elemento.click()
     except ElementClickInterceptedException:
         fechar_popup_do_site(driver, log_file)
-        elemento.click()
+        try:
+            elemento.click()
+        except ElementClickInterceptedException:
+            # Continua bloqueado por outro elemento da página (não é o pop-up de notificações):
+            # clica via JavaScript, que ignora o que estiver por cima
+            log("[AVISO] Clique bloqueado por outro elemento da página; clicando via JavaScript.", log_file)
+            driver.execute_script("arguments[0].click();", elemento)
+
+def esperar_lista_de_lojas(wait):
+    # Espera a lista de Acordos carregar: pelo menos um botão cujo texto começa com 3 dígitos (ex.: "013 - SAO BORJA").
+    # translate(...) apaga os dígitos dos 3 primeiros caracteres; se não sobrar nada, os 3 eram dígitos.
+    # Se a lista não carregar (até 60s), levanta TimeoutException: o upload falha e é tentado de novo,
+    # em vez de o robô achar que a loja não existe e criar uma duplicada
+    xpath_qualquer_loja = (
+        "//span[contains(@class, 'mdc-button__label')"
+        " and string-length(normalize-space(.)) > 3"
+        " and translate(substring(normalize-space(.), 1, 3), '0123456789', '') = '']"
+    )
+    wait.until(EC.presence_of_element_located((By.XPATH, xpath_qualquer_loja)))
 
 def abrir_edicao_da_loja(driver, wait, numero_loja_formatado, nome_loja=None, log_file=None):
+    # Devolve 'OK' (loja existente aberta para edição), 'CRIADA' (loja criada agora e aberta para edição),
+    # 'LOJA_NAO_ENCONTRADA' ou 'FALHA_CRIACAO_LOJA'
+    loja_criada = False
+
+    # Com a lista já carregada, a loja aparece na hora se existir: não precisa esperar 60s por ela
+    esperar_lista_de_lojas(wait)
+
     try:
         loja_xpath = f"//span[contains(@class, 'mdc-button__label') and starts-with(normalize-space(.), '{numero_loja_formatado}')]"
-        elemento_loja = wait.until(EC.element_to_be_clickable((By.XPATH, loja_xpath)))
+        elemento_loja = WebDriverWait(driver, 5).until(EC.element_to_be_clickable((By.XPATH, loja_xpath)))
         driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", elemento_loja)
         clicar_fechando_popup(driver, elemento_loja, log_file)
     except TimeoutException:
@@ -453,9 +556,9 @@ def abrir_edicao_da_loja(driver, wait, numero_loja_formatado, nome_loja=None, lo
 
         loja_xpath_ampla = f"//span[contains(@class, 'mdc-button__label') and contains(normalize-space(.), '{numero_loja_formatado}')]"
         try:
-            elemento_loja = WebDriverWait(driver, 8).until(EC.element_to_be_clickable((By.XPATH, loja_xpath_ampla)))
+            elemento_loja = WebDriverWait(driver, 3).until(EC.element_to_be_clickable((By.XPATH, loja_xpath_ampla)))
             driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", elemento_loja)
-            elemento_loja.click()
+            clicar_fechando_popup(driver, elemento_loja, log_file)
         except TimeoutException:
             if criar_loja_no_comuniq(driver, wait, nome_loja, log_file) != 'OK':
                 return 'FALHA_CRIACAO_LOJA'
@@ -463,7 +566,8 @@ def abrir_edicao_da_loja(driver, wait, numero_loja_formatado, nome_loja=None, lo
                 loja_xpath_nova = f"//span[contains(@class, 'mdc-button__label') and contains(normalize-space(.), '{nome_loja}')]"
                 elemento_loja = WebDriverWait(driver, 15).until(EC.element_to_be_clickable((By.XPATH, loja_xpath_nova)))
                 driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", elemento_loja)
-                elemento_loja.click()
+                clicar_fechando_popup(driver, elemento_loja, log_file)
+                loja_criada = True
             except TimeoutException:
                 log(f"[ERRO] Loja '{nome_loja}' criada, mas o botão não ficou clicável.", log_file)
                 return 'FALHA_CRIACAO_LOJA'
@@ -475,13 +579,18 @@ def abrir_edicao_da_loja(driver, wait, numero_loja_formatado, nome_loja=None, lo
     except TimeoutException:
         pass
 
-    wait.until(EC.element_to_be_clickable((By.XPATH, "//button[normalize-space(text())='Ações']"))).click()
-    wait.until(EC.element_to_be_clickable((By.XPATH, "//a[normalize-space(text())='Editar']"))).click()
+    botao_acoes = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[normalize-space(text())='Ações']")))
+    clicar_fechando_popup(driver, botao_acoes, log_file)
+    link_editar = wait.until(EC.element_to_be_clickable((By.XPATH, "//a[normalize-space(text())='Editar']")))
+    clicar_fechando_popup(driver, link_editar, log_file)
 
     anexos = wait.until(EC.visibility_of_element_located((By.CSS_SELECTOR, "div.dz-clickable")))
     driver.execute_script("arguments[0].scrollIntoView(true);", anexos)
 
     wait.until(lambda d: len(d.find_elements(By.XPATH, "//input[@type='file']")) >= 3)
+
+    if loja_criada:
+        return 'CRIADA'
     return 'OK'
 
 def obter_anexos_salvos(driver, wait, log_file):
@@ -529,19 +638,27 @@ def upload_arquivo_para_loja(driver, wait, numero_loja_formatado, caminho_arquiv
             return 'FALHA_LOJA_NAO_ENCONTRADA'
         if status_loja == 'FALHA_CRIACAO_LOJA':
             log(f"[ERRO MANUAL] Falha ao criar a loja {numero_loja_formatado} ('{nome_loja}') no ComuniQ para o arquivo '{nome_arquivo_original}'.", log_file)
+            # A criação pode ter parado no meio de outra página: volta para a lista de Acordos,
+            # senão as próximas lojas são procuradas na página errada e todas falham em sequência
+            navegar_para_acordos(driver, wait, log_file)
             return 'FALHA_CRIACAO_LOJA'
-        
+
         input_alvo = wait.until(EC.presence_of_all_elements_located((By.XPATH, "//input[@type='file']")))[2]
 
         nome_final_alvo = os.path.basename(caminho_arquivo_completo)
 
-        nomes_existentes = obter_anexos_salvos(driver, wait, log_file)
-        log(f"[DEBUG] Anexos na loja {numero_loja_formatado}: {nomes_existentes}", log_file)
+        if status_loja == 'CRIADA':
+            # Loja acabou de ser criada: não tem anexos, não precisa esperar a lista carregar (economiza 30s)
+            nomes_existentes = []
+            log(f"[INFO] Loja {numero_loja_formatado} criada agora: sem anexos ainda.", log_file)
+        else:
+            nomes_existentes = obter_anexos_salvos(driver, wait, log_file)
+            log(f"[DEBUG] Anexos na loja {numero_loja_formatado}: {nomes_existentes}", log_file)
 
         contagem_antes = len(nomes_existentes)
         log(f"[INFO] Contagem antes do upload para '{nome_arquivo_original}': {contagem_antes} arquivos.", log_file)
 
-        if contagem_antes == 0:
+        if contagem_antes == 0 and status_loja != 'CRIADA':
             log(f"[AVISO] Lista de anexos vazia para loja {numero_loja_formatado} — a checagem de duplicata pode não estar efetiva.", log_file)
 
         nome_normalizado_alvo = normalizar(nome_final_alvo)
@@ -637,7 +754,7 @@ def upload_arquivo_para_loja(driver, wait, numero_loja_formatado, caminho_arquiv
             return 'FALHA_VERIFICACAO'
 
     except Exception as e:
-        log(f"[ERRO GERAL] Falha no upload de '{nome_arquivo_original}' para a loja {numero_loja_formatado}. Erro: {e}", log_file)
+        log(f"[ERRO GERAL] Falha no upload de '{nome_arquivo_original}' para a loja {numero_loja_formatado}. Erro: {resumir_erro(e)}", log_file)
         driver.get(URL_WIKI)
         wait.until(EC.element_to_be_clickable((By.XPATH, "//button[@aria-label='Toggle Remuneração CS']")))
         navegar_para_acordos(driver, wait, log_file)
@@ -880,8 +997,8 @@ def processar_pasta_reprocessar(driver, wait, pasta_reprocessar, pasta_sucesso, 
                         raise Exception(f"Não foi possível reiniciar o navegador após {MAX_TENTATIVAS_REINICIO} tentativas.")
                     continue
                 else:
-                    log(f"[ERRO FATAL] Erro inesperado ao reprocessar '{nome_arquivo}': {e}", log_file, espacamento=True)
-                    resultado, motivo = 'FALHA', f'Erro inesperado: {e}'
+                    log(f"[ERRO FATAL] Erro inesperado ao reprocessar '{nome_arquivo}': {resumir_erro(e)}", log_file, espacamento=True)
+                    resultado, motivo = 'FALHA', f'Erro inesperado: {resumir_erro(e)}'
                     break
 
         if resultado is None:
@@ -919,7 +1036,8 @@ def processar_pasta_reprocessar(driver, wait, pasta_reprocessar, pasta_sucesso, 
 def processar_arquivos(diretorio_origem, pasta_temp, log_file_path, usuario, senha, parar_event=None, automatico=False):
     # automatico=True (--auto-start / agendador): ignora diretorio_origem e usa a pasta do mês atual,
     # verificando antes a Reprocessar/ do mês anterior
-    if os.path.exists(log_file_path): os.remove(log_file_path)
+    arquivar_log_anterior(log_file_path)  # guarda o log da execução anterior na pasta Logs (os 30 últimos)
+    lojas_criadas_na_execucao.clear()      # começa a execução sem nenhuma loja criada
     data_inicio = datetime.now()  # data/hora de início, usada no assunto/corpo do email
     # Acumula os resultados da execução para o relatório simples e o email
     resumo = {
@@ -1043,8 +1161,8 @@ def processar_arquivos(diretorio_origem, pasta_temp, log_file_path, usuario, sen
                                     raise Exception(f"Não foi possível reiniciar o navegador após {MAX_TENTATIVAS_REINICIO} tentativas.")
                                 continue
                             else:
-                                log(f"[ERRO FATAL] Erro inesperado ao processar '{nome_arquivo}': {e}", log_file, espacamento=True)
-                                resultado, motivo = 'FALHA', f'Erro inesperado: {e}'
+                                log(f"[ERRO FATAL] Erro inesperado ao processar '{nome_arquivo}': {resumir_erro(e)}", log_file, espacamento=True)
+                                resultado, motivo = 'FALHA', f'Erro inesperado: {resumir_erro(e)}'
                                 break 
                     if resultado is None:
                         resultado, motivo = 'FALHA', 'Erro de sessão/inesperado durante o processamento'
@@ -1070,7 +1188,7 @@ def processar_arquivos(diretorio_origem, pasta_temp, log_file_path, usuario, sen
                     })
         
         except Exception as e:
-            log(f"[ERRO FATAL] Ocorreu um erro geral no processo: {e}", log_file, espacamento=True)
+            log(f"[ERRO FATAL] Ocorreu um erro geral no processo: {resumir_erro(e)}", log_file, espacamento=True)
             resumo['erro_fatal'] = str(e)  # destaca no email que a execução foi interrompida por erro
 
         finally:
@@ -1083,6 +1201,8 @@ def processar_arquivos(diretorio_origem, pasta_temp, log_file_path, usuario, sen
 
             log(f"=== FIM DA AUTOMAÇÃO: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ===", log_file, espacamento=True)
             if driver: driver.quit()
+
+    resumo['lojas_criadas'] = list(lojas_criadas_na_execucao)  # aparece no relatório e no corpo do email
 
     # Relatório simples (para quem não é da área de TI), gravado ao lado do log técnico.
     # É ele que vai no email; o log_historico.txt fica só no computador

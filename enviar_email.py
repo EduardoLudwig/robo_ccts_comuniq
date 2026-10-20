@@ -84,18 +84,22 @@ def linha_com_pontos(texto, numero):
     pontos = "." * (40 - len(texto))
     return f"   {texto} {pontos} {numero}"
 
-def linhas_do_arquivo(item):
-    # Nome do arquivo e, logo abaixo, o que aconteceu em cada loja
+def linhas_do_arquivo(item, numeros_criados):
+    # Nome do arquivo e, logo abaixo, o que aconteceu em cada loja.
+    # numeros_criados: lojas criadas pelo robô nesta execução (ganham uma marcação ao lado)
     linhas = [item['arquivo']]
     for loja in item['lojas']:
-        linhas.append(f"   Loja {loja}: {mensagem_da_loja(item['lojas'][loja])}")
+        texto = f"   Loja {loja}: {mensagem_da_loja(item['lojas'][loja])}"
+        if loja in numeros_criados:
+            texto += " (loja criada nesta execução)"
+        linhas.append(texto)
     if not item['lojas']:  # falhou antes de chegar nas lojas
         motivo = str(item['motivo']).split("\n")[0]  # só a 1ª linha: o resto é detalhe técnico
         linhas.append(f"   NÃO ENVIADO - {motivo}")
     linhas.append("")
     return linhas
 
-def linhas_da_secao(titulo, explicacao, itens):
+def linhas_da_secao(titulo, explicacao, itens, numeros_criados):
     # Uma seção: título com a quantidade, a explicação e os arquivos logo abaixo
     linhas = [SEPARADOR, f"{titulo} ({len(itens)})"]
     linhas.extend(explicacao)
@@ -104,7 +108,7 @@ def linhas_da_secao(titulo, explicacao, itens):
         linhas.append("Nenhum arquivo.")
         linhas.append("")
     for item in itens:
-        linhas.extend(linhas_do_arquivo(item))
+        linhas.extend(linhas_do_arquivo(item, numeros_criados))
     return linhas
 
 def montar_relatorio(resumo, data_ref):
@@ -123,6 +127,12 @@ def montar_relatorio(resumo, data_ref):
         else:
             pendentes.append(item)
     fora_do_padrao = resumo.get('fora_do_padrao', [])
+
+    # Lojas criadas pelo robô nesta execução (cada uma: {'numero': '999', 'nome': '999 - TESTE'})
+    lojas_criadas = resumo.get('lojas_criadas', [])
+    numeros_criados = []
+    for loja in lojas_criadas:
+        numeros_criados.append(loja['numero'])
 
     # Cabeçalho
     linhas = []
@@ -155,22 +165,35 @@ def montar_relatorio(resumo, data_ref):
     linhas.append(linha_com_pontos("Já estavam no ComuniQ", len(ja_existiam)))
     linhas.append(linha_com_pontos("Pendentes", len(pendentes)))
     linhas.append(linha_com_pontos("Com o nome fora do padrão", len(fora_do_padrao)))
+    linhas.append(linha_com_pontos("Lojas criadas no ComuniQ", len(lojas_criadas)))
     linhas.append("")
 
     # Seções
     linhas.extend(linhas_da_secao(
         "ARQUIVOS ENVIADOS",
         ["Subiram para todas as lojas e foram movidos para a pasta Sucesso."],
-        enviados))
+        enviados, numeros_criados))
     linhas.extend(linhas_da_secao(
         "JÁ ESTAVAM NO COMUNIQ",
         ["O arquivo já existia em todas as lojas; nada foi enviado."],
-        ja_existiam))
+        ja_existiam, numeros_criados))
     linhas.extend(linhas_da_secao(
         "PENDENTES",
         ["Alguma loja falhou. O arquivo está na pasta Reprocessar e será",
          "tentado de novo na próxima execução."],
-        pendentes))
+        pendentes, numeros_criados))
+
+    # Lojas criadas no ComuniQ pelo robô
+    linhas.append(SEPARADOR)
+    linhas.append(f"LOJAS CRIADAS NO COMUNIQ ({len(lojas_criadas)})")
+    linhas.append("Não existiam no ComuniQ e foram criadas automaticamente pelo robô.")
+    linhas.append("Confira se o nome da página ficou correto.")
+    linhas.append("")
+    if not lojas_criadas:
+        linhas.append("Nenhuma loja criada.")
+    for loja in lojas_criadas:
+        linhas.append(f"   - {loja['nome']}")
+    linhas.append("")
 
     # Nome fora do padrão (aqui são só nomes de arquivo, sem lojas)
     linhas.append(SEPARADOR)
@@ -220,11 +243,18 @@ def montar_corpo_html(resumo, data_ref):
     ja_existiam = len(resumo.get('ja_existe', []))
     pendentes = len(resumo.get('falhas', []))
     fora_do_padrao = len(resumo.get('fora_do_padrao', []))
+    lojas_criadas = len(resumo.get('lojas_criadas', []))
 
     verde = "#397F5A"  # mesmo verde da interface do robô
     cinza = "#666666"
     laranja = "#D9730D"
     vermelho = "#C0392B"
+    azul = "#2E6DA4"
+
+    # Lojas criadas ficam em azul quando houver alguma: não é erro, mas vale conferir o nome no anexo
+    cor_lojas_criadas = cinza
+    if lojas_criadas > 0:
+        cor_lojas_criadas = azul
 
     # Pendentes e fora do padrão ficam em laranja só quando há algo para a pessoa resolver
     cor_pendentes = cinza
@@ -247,24 +277,24 @@ def montar_corpo_html(resumo, data_ref):
     avisos_html = ""
     if resumo.get('erro_fatal'):
         motivo = str(resumo['erro_fatal']).split("\n")[0]  # só a 1ª linha: o resto é detalhe técnico
-        avisos_html += caixa_aviso(f"<b>ATENÇÃO:</b> a execução foi interrompida antes do fim. Motivo: {html.escape(motivo)}", vermelho, "#FDECEA")
+        avisos_html += caixa_aviso(f"<b>ATENÇÃO:</b> a execução foi interrompida antes da conclusão. Motivo: {html.escape(motivo)}", vermelho, "#FDECEA")
     if not resumo.get('arquivos'):
         if resumo.get('pasta_nao_encontrada'):
             avisos_html += caixa_aviso(f"<b>AVISO:</b> {html.escape(resumo['pasta_nao_encontrada'])}. Nenhum arquivo foi processado.", laranja, "#FFF4E5")
         else:
-            avisos_html += caixa_aviso("Não havia arquivos para processar nesta execução.", cinza, "#F2F2F2")
+            avisos_html += caixa_aviso("Não foram localizados arquivos para processamento nesta execução.", cinza, "#F2F2F2")
 
     # Tabela de resumo
     tabela = ""
-    tabela += linha_resumo("Arquivos enviados", "Subiram para todas as lojas do arquivo", enviados, verde)
-    tabela += linha_resumo("Já estavam no ComuniQ", "Nada foi enviado: o arquivo já existia nas lojas", ja_existiam, cinza)
-    tabela += linha_resumo("Pendentes", "Alguma loja falhou; o arquivo será tentado de novo na próxima execução", pendentes, cor_pendentes)
-    tabela += linha_resumo("Com o nome fora do padrão", "Não foram enviados por causa do nome do arquivo", fora_do_padrao, cor_fora_do_padrao)
+    tabela += linha_resumo("Arquivos enviados", "Documentos enviados com sucesso para todas as lojas correspondentes.", enviados, verde)
+    tabela += linha_resumo("Arquivos já existentes no ComuniQ", "Documentos que já constavam em todas as lojas; nenhum envio foi necessário.", ja_existiam, cinza)
+    tabela += linha_resumo("Arquivos pendentes", "Houve falha no envio para ao menos uma loja; o arquivo será reprocessado na próxima execução.", pendentes, cor_pendentes)
+    tabela += linha_resumo("Lojas criadas no ComuniQ", "Lojas inexistentes no ComuniQ, criadas automaticamente. A relação consta no relatório em anexo.", lojas_criadas, cor_lojas_criadas)
+    tabela += linha_resumo("Arquivos fora do padrão de nomenclatura", "Documentos não enviados em razão do nome do arquivo.", fora_do_padrao, cor_fora_do_padrao)
     if fora_do_padrao > 0:
         aviso = (
-            "<b>ATENÇÃO:</b> há arquivos com o nome fora do padrão. Revise a pasta e renomeie no padrão "
-            "<b>lojas_cidade_sindicato_vigência</b> (exemplo: 160,310_LAJEADO_SIND0088_2026) "
-            "para que sejam enviados na próxima execução. A lista está no relatório em anexo."
+            "<b>ATENÇÃO:</b> foram identificados arquivos fora do padrão de nomenclatura. Revise a pasta para a renomeação.<br>"
+            "Padrão: <b>lojas_cidade_sindicato_vigência</b> (exemplo: 160,310_LAJEADO_SIND0088_2026)"
         )
         tabela += f'<tr><td colspan="2" style="padding: 8px 0;">{caixa_aviso(aviso, laranja, "#FFF4E5")}</td></tr>'
 
