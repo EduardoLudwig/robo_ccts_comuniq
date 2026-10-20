@@ -82,8 +82,15 @@ garantir_config_inicial()  # garante o config.ini assim que o módulo é importa
 LOJAS_POR_REINICIO = 20  # depois de tantas lojas, reinicia o navegador ENTRE um arquivo e outro (libera memória)
 MAX_REINICIOS_SESSAO = 3  # reinícios por arquivo quando a sessão do navegador cai; depois disso o arquivo vai para Reprocessar/
 MAX_TENTATIVAS_REINICIO = 3  # tentativas para abrir o navegador já logado; se todas falharem, a execução para
+CLIQUES_BLOQUEADOS_PARA_REINICIAR = 3  # cliques bloqueados seguidos indicam página travada; reinicia o navegador na hora
 lojas_desde_ultimo_reinicio = 0  # lojas processadas desde que o navegador atual foi aberto (conta a execução inteira)
 lojas_criadas_na_execucao = []  # lojas criadas pelo robô nesta execução, ex.: {'numero': '999', 'nome': '999 - TESTE'}
+cliques_bloqueados_seguidos = 0  # cliques via JavaScript por causa de overlay; zera a cada clique normal bem-sucedido
+
+class SessaoTravada(Exception): # Para diferenciar erro comum de um tipo próprio. fecha e reabre o chrome imediatamente
+    # Página travada (overlay bloqueando cliques) ou loja que não abre: o navegador precisa ser reiniciado.
+    # É separada de erro comum para o processamento do arquivo reiniciar a sessão e retomar só o que faltou
+    pass
 
 URL_LOGIN = "https://queroquero.mybeehome.com/login"
 URL_WIKI = "https://queroquero.mybeehome.com/wiki/492/detail"
@@ -512,17 +519,22 @@ def fechar_popup_do_site(driver, log_file):
         time.sleep(1)
 
 def clicar_fechando_popup(driver, elemento, log_file):
-    # Clica no elemento; se um pop-up do site estiver na frente, fecha e clica de novo
+    # Clica no elemento; se um pop-up do site estiver na frente, fecha e clica de novo.
+    # Clique normal que funciona zera a contagem; fallback via JavaScript conta como bloqueio seguido.
+    global cliques_bloqueados_seguidos
     try:
         elemento.click()
+        cliques_bloqueados_seguidos = 0
     except ElementClickInterceptedException:
         fechar_popup_do_site(driver, log_file)
         try:
             elemento.click()
+            cliques_bloqueados_seguidos = 0
         except ElementClickInterceptedException:
             # Continua bloqueado por outro elemento da página (não é o pop-up de notificações):
             # clica via JavaScript, que ignora o que estiver por cima
-            log("[AVISO] Clique bloqueado por outro elemento da página; clicando via JavaScript.", log_file)
+            cliques_bloqueados_seguidos += 1
+            log(f"[AVISO] Clique bloqueado por outro elemento da página ({cliques_bloqueados_seguidos}/{CLIQUES_BLOQUEADOS_PARA_REINICIAR}); clicando via JavaScript.", log_file)
             driver.execute_script("arguments[0].click();", elemento)
 
 def esperar_lista_de_lojas(wait):
@@ -537,6 +549,13 @@ def esperar_lista_de_lojas(wait):
     )
     wait.until(EC.presence_of_element_located((By.XPATH, xpath_qualquer_loja)))
 
+def verificar_sessao_travada(log_file, contexto):
+    # Se os cliques seguidos foram bloqueados por um overlay, aborta já: reiniciar o navegador é mais rápido
+    # do que esperar o WebDriverWait (até 60s) e falhar de novo na mesma página travada
+    if cliques_bloqueados_seguidos >= CLIQUES_BLOQUEADOS_PARA_REINICIAR:
+        log(f"[AVISO] {contexto}: {cliques_bloqueados_seguidos} cliques bloqueados seguidos. Reiniciando o navegador...", log_file)
+        raise SessaoTravada(f"Página travada ({contexto}).")
+
 def abrir_edicao_da_loja(driver, wait, numero_loja_formatado, nome_loja=None, log_file=None):
     # Devolve 'OK' (loja existente aberta para edição), 'CRIADA' (loja criada agora e aberta para edição),
     # 'LOJA_NAO_ENCONTRADA' ou 'FALHA_CRIACAO_LOJA'
@@ -550,6 +569,7 @@ def abrir_edicao_da_loja(driver, wait, numero_loja_formatado, nome_loja=None, lo
         elemento_loja = WebDriverWait(driver, 5).until(EC.element_to_be_clickable((By.XPATH, loja_xpath)))
         driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", elemento_loja)
         clicar_fechando_popup(driver, elemento_loja, log_file)
+        verificar_sessao_travada(log_file, f"ao abrir a loja {numero_loja_formatado}")
     except TimeoutException:
         if not (carregar_flag_criar_loja() and nome_loja and log_file):
             return 'LOJA_NAO_ENCONTRADA'
@@ -559,6 +579,7 @@ def abrir_edicao_da_loja(driver, wait, numero_loja_formatado, nome_loja=None, lo
             elemento_loja = WebDriverWait(driver, 3).until(EC.element_to_be_clickable((By.XPATH, loja_xpath_ampla)))
             driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", elemento_loja)
             clicar_fechando_popup(driver, elemento_loja, log_file)
+            verificar_sessao_travada(log_file, f"ao abrir a loja {numero_loja_formatado}")
         except TimeoutException:
             if criar_loja_no_comuniq(driver, wait, nome_loja, log_file) != 'OK':
                 return 'FALHA_CRIACAO_LOJA'
@@ -567,6 +588,7 @@ def abrir_edicao_da_loja(driver, wait, numero_loja_formatado, nome_loja=None, lo
                 elemento_loja = WebDriverWait(driver, 15).until(EC.element_to_be_clickable((By.XPATH, loja_xpath_nova)))
                 driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", elemento_loja)
                 clicar_fechando_popup(driver, elemento_loja, log_file)
+                verificar_sessao_travada(log_file, f"ao abrir a loja {numero_loja_formatado}")
                 loja_criada = True
             except TimeoutException:
                 log(f"[ERRO] Loja '{nome_loja}' criada, mas o botão não ficou clicável.", log_file)
@@ -575,14 +597,16 @@ def abrir_edicao_da_loja(driver, wait, numero_loja_formatado, nome_loja=None, lo
     try:
         popup_wait = WebDriverWait(driver, 3)
         botao_cancelar = popup_wait.until(EC.element_to_be_clickable((By.XPATH, "//button[@id='onesignal-slidedown-cancel-button']")))
-        botao_cancelar.click()
+        clicar_fechando_popup(driver, botao_cancelar, log_file)
     except TimeoutException:
         pass
 
     botao_acoes = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[normalize-space(text())='Ações']")))
     clicar_fechando_popup(driver, botao_acoes, log_file)
+    verificar_sessao_travada(log_file, f"ao abrir as Ações da loja {numero_loja_formatado}")
     link_editar = wait.until(EC.element_to_be_clickable((By.XPATH, "//a[normalize-space(text())='Editar']")))
     clicar_fechando_popup(driver, link_editar, log_file)
+    verificar_sessao_travada(log_file, f"ao editar a loja {numero_loja_formatado}")
 
     anexos = wait.until(EC.visibility_of_element_located((By.CSS_SELECTOR, "div.dz-clickable")))
     driver.execute_script("arguments[0].scrollIntoView(true);", anexos)
@@ -629,10 +653,22 @@ def obter_anexos_salvos(driver, wait, log_file):
     return nomes_existentes
 
 def upload_arquivo_para_loja(driver, wait, numero_loja_formatado, caminho_arquivo_completo, log_file, nome_arquivo_original, nome_loja=None):
+    global cliques_bloqueados_seguidos
+
+    def _sessao_suspeita():
+        return cliques_bloqueados_seguidos >= CLIQUES_BLOQUEADOS_PARA_REINICIAR
+
     try:
         log(f"--- Iniciando upload de '{nome_arquivo_original}' para a loja {numero_loja_formatado} ---", log_file, registrar_em_arquivo=False)
+
+        if _sessao_suspeita():
+            log(f"[AVISO] Loja {numero_loja_formatado}: página já vinha com {cliques_bloqueados_seguidos} cliques bloqueados seguidos. Reiniciando o navegador...", log_file)
+            raise SessaoTravada(f"Página travada antes de abrir a loja {numero_loja_formatado}.")
         
         status_loja = abrir_edicao_da_loja(driver, wait, numero_loja_formatado, nome_loja, log_file)
+        if _sessao_suspeita():
+            log(f"[AVISO] Loja {numero_loja_formatado}: {cliques_bloqueados_seguidos} cliques bloqueados seguidos ao abrir a loja. Reiniciando o navegador...", log_file)
+            raise SessaoTravada(f"Página travada (cliques bloqueados) ao abrir a loja {numero_loja_formatado}.")
         if status_loja == 'LOJA_NAO_ENCONTRADA':
             log(f"[ERRO MANUAL] Loja {numero_loja_formatado} não encontrada para o arquivo '{nome_arquivo_original}'.", log_file)
             return 'FALHA_LOJA_NAO_ENCONTRADA'
@@ -730,10 +766,13 @@ def upload_arquivo_para_loja(driver, wait, numero_loja_formatado, caminho_arquiv
         driver.execute_script("arguments[0].scrollIntoView(true);", botao_salvar)
         try:
             botao_salvar.click()
+            cliques_bloqueados_seguidos = 0
         except Exception:
-            log(f"[AVISO] Clique normal no botão Salvar bloqueado; tentando clicar via JavaScript.", log_file)
+            cliques_bloqueados_seguidos += 1
+            log(f"[AVISO] Clique normal no botão Salvar bloqueado ({cliques_bloqueados_seguidos}/{CLIQUES_BLOQUEADOS_PARA_REINICIAR}); tentando clicar via JavaScript.", log_file)
             driver.execute_script("arguments[0].click();", botao_salvar)
         log(f"[DEBUG] Botão Salvar clicado; aguardando retorno à tela de Ações.", log_file)
+        verificar_sessao_travada(log_file, f"ao salvar a loja {numero_loja_formatado}")
 
         try:
             WebDriverWait(driver, 15).until(EC.element_to_be_clickable((By.XPATH, "//button[normalize-space(text())='Ações']")))
@@ -746,6 +785,7 @@ def upload_arquivo_para_loja(driver, wait, numero_loja_formatado, caminho_arquiv
             contagem_depois = len(anexos_salvos)
             if contagem_depois > contagem_antes:
                 navegar_para_acordos(driver, wait, log_file)
+                cliques_bloqueados_seguidos = 0
                 log(f"[SUCESSO CONFIRMADO] '{nome_final_alvo}' salvo na loja {numero_loja_formatado} (anexos: {contagem_antes} → {contagem_depois}).", log_file, registrar_em_arquivo=False)
                 return 'SUCESSO'
             navegar_para_acordos(driver, wait, log_file)
@@ -753,7 +793,12 @@ def upload_arquivo_para_loja(driver, wait, numero_loja_formatado, caminho_arquiv
         else:
             return 'FALHA_VERIFICACAO'
 
+    except SessaoTravada:
+        raise
     except Exception as e:
+        if isinstance(e, TimeoutException) or _sessao_suspeita():
+            log(f"[AVISO] Loja {numero_loja_formatado}: página travada (timeout ao abrir/confirmar a loja ou cliques bloqueados). Reiniciando o navegador...", log_file)
+            raise SessaoTravada(f"Página travada ao abrir/confirmar a loja {numero_loja_formatado}.") from e
         log(f"[ERRO GERAL] Falha no upload de '{nome_arquivo_original}' para a loja {numero_loja_formatado}. Erro: {resumir_erro(e)}", log_file)
         driver.get(URL_WIKI)
         wait.until(EC.element_to_be_clickable((By.XPATH, "//button[@aria-label='Toggle Remuneração CS']")))
@@ -781,7 +826,7 @@ def upload_com_verificacao_e_retry(driver, wait, numero_loja_formatado, caminho_
 def _reiniciar_sessao(driver, wait, usuario, senha, log_file):
     # Fecha o navegador atual (se houver) e abre outro já logado na página de Acordos.
     # Tenta até MAX_TENTATIVAS_REINICIO vezes; se todas falharem, devolve (None, None)
-    global lojas_desde_ultimo_reinicio
+    global lojas_desde_ultimo_reinicio, cliques_bloqueados_seguidos
 
     try:
         driver.quit()
@@ -802,6 +847,7 @@ def _reiniciar_sessao(driver, wait, usuario, senha, log_file):
                 log("[AVISO] Não foi possível abrir a página de Acordos.", log_file)
             else:
                 lojas_desde_ultimo_reinicio = 0  # navegador novo: zera a contagem do reinício programado
+                cliques_bloqueados_seguidos = 0  # navegador novo: sem bloqueios pendentes da sessão antiga
                 return novo_driver, novo_wait
 
             # Abriu, mas não logou ou não navegou: fecha antes de tentar de novo
@@ -875,9 +921,12 @@ def processar_um_unico_arquivo(driver, wait, nome_arquivo, log_file, lojas_confi
 
             if numero_formatado in lojas_confirmadas:
                 resultado_anterior = lojas_confirmadas[numero_formatado]
-                log(f"[PULO] Loja {numero_formatado} já processada ('{resultado_anterior}') nesta execução para '{nome_arquivo_completo}'; pulando reenvio.", log_file)
-                resultados_lojas[resultado_anterior].append(numero_formatado)
-                continue
+                if resultado_anterior in ('SUCESSO', 'JA_EXISTE'):
+                    log(f"[PULO] Loja {numero_formatado} já processada ('{resultado_anterior}') nesta execução para '{nome_arquivo_completo}'; pulando reenvio.", log_file)
+                    resultados_lojas[resultado_anterior].append(numero_formatado)
+                    continue
+                # Falhou numa tentativa anterior (ex.: antes de reiniciar o navegador): tenta de novo agora
+                log(f"[INFO] Loja {numero_formatado} falhou antes ('{resultado_anterior}'); tentando novamente nesta execução.", log_file)
 
             resultado_upload = upload_com_verificacao_e_retry(driver, wait, numero_formatado, caminho_arquivo_preparado, log_file, nome_arquivo_completo, nome_loja)
 
@@ -985,13 +1034,16 @@ def processar_pasta_reprocessar(driver, wait, pasta_reprocessar, pasta_sucesso, 
                 )
                 break
             except Exception as e:
-                if _sessao_morta(e):
+                if _sessao_morta(e) or isinstance(e, SessaoTravada):
                     tentativas_sessao += 1
                     if tentativas_sessao > MAX_REINICIOS_SESSAO:
-                        log(f"[ERRO] Sessão do navegador caiu {tentativas_sessao} vezes ao reprocessar '{nome_arquivo}'. Desistindo deste arquivo.", log_file)
-                        resultado, motivo = 'FALHA', f'Sessão do navegador caiu {tentativas_sessao} vezes'
+                        log(f"[ERRO] Sessão do navegador precisou ser reiniciada {tentativas_sessao} vezes ao reprocessar '{nome_arquivo}'. Desistindo deste arquivo.", log_file)
+                        resultado, motivo = 'FALHA', f'Sessão do navegador precisou ser reiniciada {tentativas_sessao} vezes'
                         break
-                    log(f"[AVISO] Sessão do navegador encerrada ao reprocessar '{nome_arquivo}' (tentativa {tentativas_sessao}/{MAX_REINICIOS_SESSAO}). Reinicializando...", log_file)
+                    if isinstance(e, SessaoTravada):
+                        log(f"[AVISO] Página travada ao reprocessar '{nome_arquivo}' (tentativa {tentativas_sessao}/{MAX_REINICIOS_SESSAO}). Reiniciando o navegador...", log_file)
+                    else:
+                        log(f"[AVISO] Sessão do navegador encerrada ao reprocessar '{nome_arquivo}' (tentativa {tentativas_sessao}/{MAX_REINICIOS_SESSAO}). Reinicializando...", log_file)
                     driver, wait = _reiniciar_sessao(driver, wait, usuario, senha, log_file)
                     if not driver:  # o arquivo fica onde está e será tentado na próxima execução
                         raise Exception(f"Não foi possível reiniciar o navegador após {MAX_TENTATIVAS_REINICIO} tentativas.")
@@ -1036,8 +1088,10 @@ def processar_pasta_reprocessar(driver, wait, pasta_reprocessar, pasta_sucesso, 
 def processar_arquivos(diretorio_origem, pasta_temp, log_file_path, usuario, senha, parar_event=None, automatico=False):
     # automatico=True (--auto-start / agendador): ignora diretorio_origem e usa a pasta do mês atual,
     # verificando antes a Reprocessar/ do mês anterior
+    global cliques_bloqueados_seguidos
     arquivar_log_anterior(log_file_path)  # guarda o log da execução anterior na pasta Logs (os 30 últimos)
     lojas_criadas_na_execucao.clear()      # começa a execução sem nenhuma loja criada
+    cliques_bloqueados_seguidos = 0        # começa a execução sem bloqueios pendentes de uma sessão anterior
     data_inicio = datetime.now()  # data/hora de início, usada no assunto/corpo do email
     # Acumula os resultados da execução para o relatório simples e o email
     resumo = {
@@ -1149,13 +1203,16 @@ def processar_arquivos(diretorio_origem, pasta_temp, log_file_path, usuario, sen
                             resultado, motivo = processar_um_unico_arquivo(driver, wait, nome_arquivo, log_file, lojas_confirmadas_por_arquivo.setdefault(nome_arquivo, {}))
                             break
                         except Exception as e:
-                            if _sessao_morta(e):
+                            if _sessao_morta(e) or isinstance(e, SessaoTravada):
                                 tentativas_sessao += 1
                                 if tentativas_sessao > MAX_REINICIOS_SESSAO:
-                                    log(f"[ERRO] Sessão do navegador caiu {tentativas_sessao} vezes ao processar '{nome_arquivo}'. Desistindo deste arquivo.", log_file)
-                                    resultado, motivo = 'FALHA', f'Sessão do navegador caiu {tentativas_sessao} vezes'
+                                    log(f"[ERRO] Sessão do navegador precisou ser reiniciada {tentativas_sessao} vezes ao processar '{nome_arquivo}'. Desistindo deste arquivo.", log_file)
+                                    resultado, motivo = 'FALHA', f'Sessão do navegador precisou ser reiniciada {tentativas_sessao} vezes'
                                     break
-                                log(f"[AVISO] Sessão do navegador encerrada ao processar '{nome_arquivo}' (tentativa {tentativas_sessao}/{MAX_REINICIOS_SESSAO}). Reinicializando...", log_file)
+                                if isinstance(e, SessaoTravada):
+                                    log(f"[AVISO] Página travada ao processar '{nome_arquivo}' (tentativa {tentativas_sessao}/{MAX_REINICIOS_SESSAO}). Reiniciando o navegador...", log_file)
+                                else:
+                                    log(f"[AVISO] Sessão do navegador encerrada ao processar '{nome_arquivo}' (tentativa {tentativas_sessao}/{MAX_REINICIOS_SESSAO}). Reinicializando...", log_file)
                                 driver, wait = _reiniciar_sessao(driver, wait, usuario, senha, log_file)
                                 if not driver:  # o arquivo fica onde está e será tentado na próxima execução
                                     raise Exception(f"Não foi possível reiniciar o navegador após {MAX_TENTATIVAS_REINICIO} tentativas.")

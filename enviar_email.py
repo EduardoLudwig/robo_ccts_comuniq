@@ -294,7 +294,7 @@ def montar_corpo_html(resumo, data_ref):
     if fora_do_padrao > 0:
         aviso = (
             "<b>ATENÇÃO:</b> foram identificados arquivos fora do padrão de nomenclatura. Revise a pasta para a renomeação.<br>"
-            "Padrão: <b>lojas_cidade_sindicato_vigência</b> (exemplo: 160,310_LAJEADO_SIND0088_2026)"
+            "Padrão: <b>lojas_cidade_sindicato_vigência</b>"
         )
         tabela += f'<tr><td colspan="2" style="padding: 8px 0;">{caixa_aviso(aviso, laranja, "#FFF4E5")}</td></tr>'
 
