@@ -179,11 +179,15 @@ def carregar_flag_criar_loja():
         return False  # por segurança, não cria loja
 
 def extrair_cidade_loja(nome_arquivo_limpo):
-    partes = nome_arquivo_limpo.split('_')
+    nome_sem_extensao = os.path.splitext(nome_arquivo_limpo)[0]  # a extensão (.pdf/.docx) não faz parte da cidade
+    partes = nome_sem_extensao.split('_')
     if len(partes) < 2:
         return None
     cidade = partes[1].strip()  # strip: "_ TESTE" vira "TESTE" (evita "999 -  TESTE" com espaço duplo)
     if not cidade:
+        return None
+    # Sem cidade: o segundo campo é o código do sindicato ou a própria vigência
+    if re.fullmatch(r'(?i)SIND\d+', cidade) or re.fullmatch(r'\d{4}(?:-\d{4})?', cidade):
         return None
     return cidade
 
@@ -556,9 +560,9 @@ def verificar_sessao_travada(log_file, contexto):
         log(f"[AVISO] {contexto}: {cliques_bloqueados_seguidos} cliques bloqueados seguidos. Reiniciando o navegador...", log_file)
         raise SessaoTravada(f"Página travada ({contexto}).")
 
-def abrir_edicao_da_loja(driver, wait, numero_loja_formatado, nome_loja=None, log_file=None):
+def abrir_edicao_da_loja(driver, wait, numero_loja_formatado, nome_loja=None, log_file=None, permitir_criacao=True):
     # Devolve 'OK' (loja existente aberta para edição), 'CRIADA' (loja criada agora e aberta para edição),
-    # 'LOJA_NAO_ENCONTRADA' ou 'FALHA_CRIACAO_LOJA'
+    # 'LOJA_NAO_ENCONTRADA', 'LOJA_NAO_ENCONTRADA_SEM_CIDADE' ou 'FALHA_CRIACAO_LOJA'
     loja_criada = False
 
     # Com a lista já carregada, a loja aparece na hora se existir: não precisa esperar 60s por ela
@@ -571,6 +575,10 @@ def abrir_edicao_da_loja(driver, wait, numero_loja_formatado, nome_loja=None, lo
         clicar_fechando_popup(driver, elemento_loja, log_file)
         verificar_sessao_travada(log_file, f"ao abrir a loja {numero_loja_formatado}")
     except TimeoutException:
+        if not permitir_criacao:
+            if log_file:
+                log(f"[AVISO] Loja {numero_loja_formatado} não encontrada e não será criada: o nome do arquivo não contém a cidade.", log_file)
+            return 'LOJA_NAO_ENCONTRADA_SEM_CIDADE'
         if not (carregar_flag_criar_loja() and nome_loja and log_file):
             return 'LOJA_NAO_ENCONTRADA'
 
@@ -652,7 +660,7 @@ def obter_anexos_salvos(driver, wait, log_file):
         log(f"[DEBUG] Lista de anexos estabilizada com {len(nomes_existentes)} arquivos.", log_file)
     return nomes_existentes
 
-def upload_arquivo_para_loja(driver, wait, numero_loja_formatado, caminho_arquivo_completo, log_file, nome_arquivo_original, nome_loja=None):
+def upload_arquivo_para_loja(driver, wait, numero_loja_formatado, caminho_arquivo_completo, log_file, nome_arquivo_original, nome_loja=None, permitir_criacao=True):
     global cliques_bloqueados_seguidos
 
     def _sessao_suspeita():
@@ -665,13 +673,16 @@ def upload_arquivo_para_loja(driver, wait, numero_loja_formatado, caminho_arquiv
             log(f"[AVISO] Loja {numero_loja_formatado}: página já vinha com {cliques_bloqueados_seguidos} cliques bloqueados seguidos. Reiniciando o navegador...", log_file)
             raise SessaoTravada(f"Página travada antes de abrir a loja {numero_loja_formatado}.")
         
-        status_loja = abrir_edicao_da_loja(driver, wait, numero_loja_formatado, nome_loja, log_file)
+        status_loja = abrir_edicao_da_loja(driver, wait, numero_loja_formatado, nome_loja, log_file, permitir_criacao)
         if _sessao_suspeita():
             log(f"[AVISO] Loja {numero_loja_formatado}: {cliques_bloqueados_seguidos} cliques bloqueados seguidos ao abrir a loja. Reiniciando o navegador...", log_file)
             raise SessaoTravada(f"Página travada (cliques bloqueados) ao abrir a loja {numero_loja_formatado}.")
         if status_loja == 'LOJA_NAO_ENCONTRADA':
             log(f"[ERRO MANUAL] Loja {numero_loja_formatado} não encontrada para o arquivo '{nome_arquivo_original}'.", log_file)
             return 'FALHA_LOJA_NAO_ENCONTRADA'
+        if status_loja == 'LOJA_NAO_ENCONTRADA_SEM_CIDADE':
+            log(f"[ERRO MANUAL] Loja {numero_loja_formatado} não encontrada e não criada automaticamente, pois o nome do arquivo '{nome_arquivo_original}' não contém a cidade.", log_file)
+            return 'FALHA_SEM_CIDADE'
         if status_loja == 'FALHA_CRIACAO_LOJA':
             log(f"[ERRO MANUAL] Falha ao criar a loja {numero_loja_formatado} ('{nome_loja}') no ComuniQ para o arquivo '{nome_arquivo_original}'.", log_file)
             # A criação pode ter parado no meio de outra página: volta para a lista de Acordos,
@@ -780,7 +791,7 @@ def upload_arquivo_para_loja(driver, wait, numero_loja_formatado, caminho_arquiv
             log(f"[AVISO] Botão 'Ações' não reapareceu em 15s na loja {numero_loja_formatado}; reabrindo a loja para conferir.", log_file)
 
         navegar_para_acordos(driver, wait, log_file)
-        if abrir_edicao_da_loja(driver, wait, numero_loja_formatado, nome_loja, log_file) == 'OK':
+        if abrir_edicao_da_loja(driver, wait, numero_loja_formatado, nome_loja, log_file, permitir_criacao) == 'OK':
             anexos_salvos = obter_anexos_salvos(driver, wait, log_file)
             contagem_depois = len(anexos_salvos)
             if contagem_depois > contagem_antes:
@@ -805,15 +816,15 @@ def upload_arquivo_para_loja(driver, wait, numero_loja_formatado, caminho_arquiv
         navegar_para_acordos(driver, wait, log_file)
         return 'FALHA_RECUPERAVEL'
 
-def upload_com_verificacao_e_retry(driver, wait, numero_loja_formatado, caminho_arquivo_completo, log_file, nome_arquivo_original, nome_loja=None):
+def upload_com_verificacao_e_retry(driver, wait, numero_loja_formatado, caminho_arquivo_completo, log_file, nome_arquivo_original, nome_loja=None, permitir_criacao=True):
     max_tentativas = 3
     for tentativa in range(1, max_tentativas + 1):
-        resultado = upload_arquivo_para_loja(driver, wait, numero_loja_formatado, caminho_arquivo_completo, log_file, nome_arquivo_original, nome_loja)
+        resultado = upload_arquivo_para_loja(driver, wait, numero_loja_formatado, caminho_arquivo_completo, log_file, nome_arquivo_original, nome_loja, permitir_criacao)
 
         if resultado == 'JA_EXISTE' and tentativa > 1:
             log(f"[SUCESSO CONFIRMADO] '{nome_arquivo_original}' confirmado na loja {numero_loja_formatado} via retry.", log_file)
             return 'SUCESSO'
-        if resultado in ('SUCESSO', 'JA_EXISTE', 'FALHA_LOJA_NAO_ENCONTRADA', 'FALHA_CRIACAO_LOJA'):
+        if resultado in ('SUCESSO', 'JA_EXISTE', 'FALHA_LOJA_NAO_ENCONTRADA', 'FALHA_SEM_CIDADE', 'FALHA_CRIACAO_LOJA'):
             return resultado
 
         log(f"[AVISO] Tentativa {tentativa}/{max_tentativas} falhou ({resultado}) para loja {numero_loja_formatado}.", log_file)
@@ -896,7 +907,7 @@ def processar_um_unico_arquivo(driver, wait, nome_arquivo, log_file, lojas_confi
     if nome_arquivo_completo != nome_arquivo_limpo:
         log(f"(Nome limpo para processamento: {nome_arquivo_limpo})", log_file)
 
-    resultados_lojas = {'SUCESSO': [], 'JA_EXISTE': [], 'FALHA_MANUAL': [], 'UPLOAD_NAO_CONFIRMADO': [], 'FALHA_RECUPERAVEL': [], 'FALHA_CRIACAO': []}
+    resultados_lojas = {'SUCESSO': [], 'JA_EXISTE': [], 'FALHA_MANUAL': [], 'UPLOAD_NAO_CONFIRMADO': [], 'FALHA_RECUPERAVEL': [], 'FALHA_CRIACAO': [], 'FALHA_SEM_CIDADE': []}
 
     numeros_loja = extrair_numeros_loja(nome_arquivo_limpo)
     if not numeros_loja:
@@ -912,6 +923,9 @@ def processar_um_unico_arquivo(driver, wait, nome_arquivo, log_file, lojas_confi
         return 'FALHA_MANUAL', "Erro ao preparar arquivo (verifique padrão da vigência)"
 
     cidade_loja = extrair_cidade_loja(nome_arquivo_limpo)
+    permitir_criacao = cidade_loja is not None
+    if not permitir_criacao:
+        log(f"[AVISO] O arquivo '{nome_arquivo_completo}' não informa a cidade no nome; a criação de lojas está bloqueada para este arquivo.", log_file)
 
     try:
         for numero in numeros_loja:
@@ -928,7 +942,7 @@ def processar_um_unico_arquivo(driver, wait, nome_arquivo, log_file, lojas_confi
                 # Falhou numa tentativa anterior (ex.: antes de reiniciar o navegador): tenta de novo agora
                 log(f"[INFO] Loja {numero_formatado} falhou antes ('{resultado_anterior}'); tentando novamente nesta execução.", log_file)
 
-            resultado_upload = upload_com_verificacao_e_retry(driver, wait, numero_formatado, caminho_arquivo_preparado, log_file, nome_arquivo_completo, nome_loja)
+            resultado_upload = upload_com_verificacao_e_retry(driver, wait, numero_formatado, caminho_arquivo_preparado, log_file, nome_arquivo_completo, nome_loja, permitir_criacao)
 
             # Converte o resultado do upload no nome da chave usada em resultados_lojas
             if resultado_upload == 'SUCESSO':
@@ -937,6 +951,8 @@ def processar_um_unico_arquivo(driver, wait, nome_arquivo, log_file, lojas_confi
                 chave_resultado = 'JA_EXISTE'
             elif resultado_upload == 'FALHA_LOJA_NAO_ENCONTRADA':
                 chave_resultado = 'FALHA_MANUAL'
+            elif resultado_upload == 'FALHA_SEM_CIDADE':
+                chave_resultado = 'FALHA_SEM_CIDADE'
             elif resultado_upload == 'FALHA_CRIACAO_LOJA':
                 chave_resultado = 'FALHA_CRIACAO'
             elif resultado_upload == 'UPLOAD_NAO_CONFIRMADO':
@@ -961,6 +977,8 @@ def processar_um_unico_arquivo(driver, wait, nome_arquivo, log_file, lojas_confi
     motivos = []
     if resultados_lojas['FALHA_MANUAL']:
         motivos.append(f"Lojas não encontradas: {', '.join(resultados_lojas['FALHA_MANUAL'])}")
+    if resultados_lojas['FALHA_SEM_CIDADE']:
+        motivos.append(f"Lojas não criadas automaticamente por ausência de cidade no nome do arquivo: {', '.join(resultados_lojas['FALHA_SEM_CIDADE'])}")
     if resultados_lojas['FALHA_CRIACAO']:
         motivos.append(f"Falha ao criar lojas no ComuniQ: {', '.join(resultados_lojas['FALHA_CRIACAO'])}")
     if resultados_lojas['UPLOAD_NAO_CONFIRMADO']:
@@ -1101,6 +1119,7 @@ def processar_arquivos(diretorio_origem, pasta_temp, log_file_path, usuario, sen
         'pasta_nao_encontrada': None,  # motivo, quando a pasta do mês atual não foi encontrada (modo automático)
         'arquivos': [],        # um item por arquivo, com o resultado de cada loja
         'fora_do_padrao': [],  # arquivos ignorados por estarem com o nome fora do padrão
+        'lojas_nao_criadas': [],  # lojas inexistentes que não foram criadas por falta de cidade no nome do arquivo
     }
 
     with open(log_file_path, 'a', encoding='utf-8') as log_file:
@@ -1260,6 +1279,17 @@ def processar_arquivos(diretorio_origem, pasta_temp, log_file_path, usuario, sen
             if driver: driver.quit()
 
     resumo['lojas_criadas'] = list(lojas_criadas_na_execucao)  # aparece no relatório e no corpo do email
+
+    # Lojas que não existiam e não foram criadas por falta de cidade no nome do arquivo
+    resumo['lojas_nao_criadas'] = []
+    vistos_nao_criadas = set()
+    for item in resumo['arquivos']:
+        for numero, resultado in item['lojas'].items():
+            if resultado == 'FALHA_SEM_CIDADE':
+                chave = (item['arquivo'], numero)
+                if chave not in vistos_nao_criadas:
+                    vistos_nao_criadas.add(chave)
+                    resumo['lojas_nao_criadas'].append({'numero': numero, 'arquivo': item['arquivo']})
 
     # Relatório simples (para quem não é da área de TI), gravado ao lado do log técnico.
     # É ele que vai no email; o log_historico.txt fica só no computador

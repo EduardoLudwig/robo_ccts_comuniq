@@ -70,6 +70,8 @@ def mensagem_da_loja(resultado):
         return "NÃO ENVIADO - a loja não foi encontrada no ComuniQ"
     elif resultado == 'FALHA_CRIACAO':
         return "NÃO ENVIADO - não foi possível criar a loja no ComuniQ"
+    elif resultado == 'FALHA_SEM_CIDADE':
+        return "NÃO ENVIADO - loja não localizada no ComuniQ e não criada automaticamente, pois o nome do arquivo não contém a cidade"
     elif resultado == 'UPLOAD_NAO_CONFIRMADO':
         return "NÃO ENVIADO - o envio não foi confirmado após 3 tentativas"
     else:
@@ -134,6 +136,9 @@ def montar_relatorio(resumo, data_ref):
     for loja in lojas_criadas:
         numeros_criados.append(loja['numero'])
 
+    # Lojas inexistentes que não foram criadas por falta de cidade no nome do arquivo
+    lojas_nao_criadas = resumo.get('lojas_nao_criadas', [])
+
     # Cabeçalho
     linhas = []
     linhas.append("RELATÓRIO DO ROBÔ CCTs COMUNIQ")
@@ -166,6 +171,7 @@ def montar_relatorio(resumo, data_ref):
     linhas.append(linha_com_pontos("Pendentes", len(pendentes)))
     linhas.append(linha_com_pontos("Com o nome fora do padrão", len(fora_do_padrao)))
     linhas.append(linha_com_pontos("Lojas criadas no ComuniQ", len(lojas_criadas)))
+    linhas.append(linha_com_pontos("Lojas não criadas (cidade ausente)", len(lojas_nao_criadas)))
     linhas.append("")
 
     # Seções
@@ -193,6 +199,20 @@ def montar_relatorio(resumo, data_ref):
         linhas.append("Nenhuma loja criada.")
     for loja in lojas_criadas:
         linhas.append(f"   - {loja['nome']}")
+    linhas.append("")
+
+    # Lojas não criadas por ausência de cidade no nome do arquivo
+    linhas.append(SEPARADOR)
+    linhas.append(f"LOJAS NÃO CRIADAS POR AUSÊNCIA DE CIDADE ({len(lojas_nao_criadas)})")
+    linhas.append("Não existiam no ComuniQ e não foram criadas automaticamente,")
+    linhas.append("pois o nome do arquivo não informa a cidade.")
+    linhas.append("Para permitir a criação, renomeie o arquivo conforme o padrão")
+    linhas.append("lojas_cidade_sindicato_vigência.")
+    linhas.append("")
+    if not lojas_nao_criadas:
+        linhas.append("Nenhuma loja.")
+    for loja in lojas_nao_criadas:
+        linhas.append(f"   - Loja {loja['numero']} (arquivo: {loja['arquivo']})")
     linhas.append("")
 
     # Nome fora do padrão (aqui são só nomes de arquivo, sem lojas)

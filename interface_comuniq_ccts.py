@@ -2,7 +2,8 @@ import customtkinter as ctk
 from tkinter import filedialog, messagebox
 import sys
 import os
-from logica_ccts import processar_arquivos, carregar_credenciais, salvar_credenciais  # credenciais agora vêm do config.ini (via logica_ccts)
+import traceback
+from logica_ccts import APP_CONFIG_DIR, log, processar_arquivos, carregar_credenciais, salvar_credenciais  # credenciais agora vêm do config.ini (via logica_ccts)
 import threading
 
 def resource_path(relative_path):
@@ -108,16 +109,22 @@ class App:
             messagebox.showwarning("Aviso", "Nenhum arquivo selecionado.")
 
     def iniciar_processo(self):
+        pasta_temp = os.path.join(APP_CONFIG_DIR, "temp_upload")
+        log_path = os.path.join(APP_CONFIG_DIR, "log_historico.txt")
+
         if not self.usuario or not self.senha:
-             messagebox.showwarning("Aviso", "Usuário ou senha não configurados. Por favor, edite o login.")
-             return
+            if self.auto_start:
+                with open(log_path, "a", encoding="utf-8") as log_file:
+                    log("[ERRO] Usuário ou senha não configurados. Execução automática encerrada.", log_file)
+                self.label_status.configure(text="Erro: usuário ou senha não configurados.")
+                self.root.after(4000, self.root.destroy)
+                return
+            messagebox.showwarning("Aviso", "Usuário ou senha não configurados. Por favor, edite o login.")
+            return
         if self.diretorio_ccts is None and not self.auto_start:  # no automático a pasta é encontrada pela lógica
             messagebox.showwarning("Aviso", "Por favor, selecione um arquivo da pasta dos CCTs antes de iniciar.")
             return
 
-        BASE_DIR = os.path.dirname(os.path.abspath(sys.executable if getattr(sys, 'frozen', False) else __file__))
-        pasta_temp = os.path.join(BASE_DIR, "temp_upload")
-        log_path = os.path.join(BASE_DIR, "log_historico.txt")
         self.parar_event.clear()
 
         def executar_processo():
@@ -137,14 +144,23 @@ class App:
                 else:
                     self.label_status.configure(text="Processo interrompido pelo usuário.")
             except Exception as e:
-                self.label_status.configure(text=f"Erro durante o processo: {e}")
-                messagebox.showerror("Erro", f"Ocorreu um erro durante o processamento: {e}. Verifique o log para mais detalhes.")
+                if self.auto_start:
+                    try:
+                        with open(log_path, "a", encoding="utf-8") as log_file:
+                            log(f"[ERRO FATAL] Erro inesperado durante a execução automática: {e}", log_file, espacamento=True)
+                            log(traceback.format_exc(), log_file)
+                    except Exception:
+                        pass
+                    self.label_status.configure(text=f"Erro durante o processo: {e}")
+                else:
+                    self.label_status.configure(text=f"Erro durante o processo: {e}")
+                    self.root.after(0, messagebox.showerror, "Erro", f"Ocorreu um erro durante o processamento: {e}. Verifique o log para mais detalhes.")
 
             finally:
                 self.spinner_running = False
                 self.spinner_label.configure(text="")
                 if self.auto_start:
-                    self.root.after(4000, self.root.destroy)  # fecha sozinho (mesmo comportamento do mediador)
+                    self.root.after(4000, self.root.destroy)  # fecha sozinho 4s após o término do processamento
 
 
         self.thread = threading.Thread(target=executar_processo)
