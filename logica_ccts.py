@@ -124,6 +124,15 @@ def resumir_erro(e):
         return f"{type(e).__name__}: {primeira_linha}"
     return type(e).__name__
 
+def _emitir_progresso(callback, **dados):
+    # Repassa o andamento para a interface sem deixar um erro de desenho derrubar a automação
+    if callback is None:
+        return
+    try:
+        callback(dados)
+    except Exception:
+        pass
+
 MAX_LOGS_GUARDADOS = 30
 
 def arquivar_log_anterior(log_file_path):
@@ -882,7 +891,7 @@ def reinicio_programado(driver, wait, usuario, senha, log_file):
     log(f"[INFO] {lojas_desde_ultimo_reinicio} lojas desde o último reinício. Reiniciando o navegador...", log_file, espacamento=True)
     return _reiniciar_sessao(driver, wait, usuario, senha, log_file)
 
-def processar_um_unico_arquivo(driver, wait, nome_arquivo, log_file, lojas_confirmadas=None, diretorio_override=None):
+def processar_um_unico_arquivo(driver, wait, nome_arquivo, log_file, lojas_confirmadas=None, diretorio_override=None, progresso_callback=None):
     global lojas_desde_ultimo_reinicio
 
     if lojas_confirmadas is None:
@@ -913,6 +922,13 @@ def processar_um_unico_arquivo(driver, wait, nome_arquivo, log_file, lojas_confi
     if not numeros_loja:
         return 'FALHA_MANUAL', "Nenhum número de loja encontrado no nome"
 
+    _emitir_progresso(
+        progresso_callback,
+        etapa="arquivo",
+        arquivo=nome_arquivo_completo,
+        total_lojas=len(numeros_loja),
+    )
+
     # O robô só aceita lojas de até 3 dígitos; números maiores na parte das lojas são ignorados (só avisa no log)
     numeros_ignorados = re.findall(r'\d{4,}', nome_arquivo_limpo.split('_')[0])
     if numeros_ignorados:
@@ -928,7 +944,7 @@ def processar_um_unico_arquivo(driver, wait, nome_arquivo, log_file, lojas_confi
         log(f"[AVISO] O arquivo '{nome_arquivo_completo}' não informa a cidade no nome; a criação de lojas está bloqueada para este arquivo.", log_file)
 
     try:
-        for numero in numeros_loja:
+        for indice_loja, numero in enumerate(numeros_loja, start=1):
             numero_formatado = numero.zfill(3)
 
             nome_loja = montar_nome_loja(numero_formatado, cidade_loja)
@@ -938,9 +954,27 @@ def processar_um_unico_arquivo(driver, wait, nome_arquivo, log_file, lojas_confi
                 if resultado_anterior in ('SUCESSO', 'JA_EXISTE'):
                     log(f"[PULO] Loja {numero_formatado} já processada ('{resultado_anterior}') nesta execução para '{nome_arquivo_completo}'; pulando reenvio.", log_file)
                     resultados_lojas[resultado_anterior].append(numero_formatado)
+                    _emitir_progresso(
+                        progresso_callback,
+                        etapa="loja_resultado",
+                        loja=numero_formatado,
+                        arquivo=nome_arquivo_completo,
+                        indice=indice_loja,
+                        total_lojas=len(numeros_loja),
+                        resultado=resultado_anterior,
+                    )
                     continue
                 # Falhou numa tentativa anterior (ex.: antes de reiniciar o navegador): tenta de novo agora
                 log(f"[INFO] Loja {numero_formatado} falhou antes ('{resultado_anterior}'); tentando novamente nesta execução.", log_file)
+
+            _emitir_progresso(
+                progresso_callback,
+                etapa="loja",
+                loja=numero_formatado,
+                arquivo=nome_arquivo_completo,
+                indice=indice_loja,
+                total_lojas=len(numeros_loja),
+            )
 
             resultado_upload = upload_com_verificacao_e_retry(driver, wait, numero_formatado, caminho_arquivo_preparado, log_file, nome_arquivo_completo, nome_loja, permitir_criacao)
 
@@ -964,6 +998,16 @@ def processar_um_unico_arquivo(driver, wait, nome_arquivo, log_file, lojas_confi
             # as lojas já feitas são puladas em vez de reprocessadas
             lojas_confirmadas[numero_formatado] = chave_resultado
             resultados_lojas[chave_resultado].append(numero_formatado)
+
+            _emitir_progresso(
+                progresso_callback,
+                etapa="loja_resultado",
+                loja=numero_formatado,
+                arquivo=nome_arquivo_completo,
+                indice=indice_loja,
+                total_lojas=len(numeros_loja),
+                resultado=chave_resultado,
+            )
 
             lojas_desde_ultimo_reinicio += 1  # usado pelo reinício programado (entre um arquivo e outro)
     finally:
@@ -1011,7 +1055,7 @@ def _sessao_morta(erro):
     ]
     return any(termo in texto for termo in termos)
 
-def processar_pasta_reprocessar(driver, wait, pasta_reprocessar, pasta_sucesso, log_file, usuario, senha, lojas_confirmadas_por_arquivo, resumo, parar_event=None):  # resumo: dict compartilhado com processar_arquivos para o email
+def processar_pasta_reprocessar(driver, wait, pasta_reprocessar, pasta_sucesso, log_file, usuario, senha, lojas_confirmadas_por_arquivo, resumo, parar_event=None, progresso_callback=None):  # resumo: dict compartilhado com processar_arquivos para o email
     # Devolve (driver, wait): se o navegador for reiniciado aqui dentro, quem chamou precisa continuar com o novo
     if not os.path.exists(pasta_reprocessar):
         log(f"[INFO] Nada para reprocessar em '{pasta_reprocessar}'.", log_file)
@@ -1030,8 +1074,14 @@ def processar_pasta_reprocessar(driver, wait, pasta_reprocessar, pasta_sucesso, 
 
     os.makedirs(pasta_sucesso, exist_ok=True)  # a Sucesso/ do mês anterior pode não existir
     log(f"=== REPROCESSAMENTO: {len(arquivos_reprocessar)} arquivo(s) em '{pasta_reprocessar}' ===", log_file, espacamento=True)
+    _emitir_progresso(
+        progresso_callback,
+        etapa="reprocessar",
+        total_arquivos=len(arquivos_reprocessar),
+        pasta=pasta_reprocessar,
+    )
 
-    for nome_arquivo in arquivos_reprocessar:
+    for indice_arquivo, nome_arquivo in enumerate(arquivos_reprocessar, start=1):
         if parar_event and parar_event.is_set():
             log("[INTERRUPÇÃO] Processo interrompido.", log_file); break
 
@@ -1048,7 +1098,8 @@ def processar_pasta_reprocessar(driver, wait, pasta_reprocessar, pasta_sucesso, 
                 resultado, motivo = processar_um_unico_arquivo(
                     driver, wait, nome_arquivo, log_file,
                     lojas_confirmadas_por_arquivo.setdefault(nome_arquivo, {}),
-                    diretorio_override=pasta_reprocessar
+                    diretorio_override=pasta_reprocessar,
+                    progresso_callback=progresso_callback
                 )
                 break
             except Exception as e:
@@ -1093,6 +1144,17 @@ def processar_pasta_reprocessar(driver, wait, pasta_reprocessar, pasta_sucesso, 
             'lojas': lojas_confirmadas_por_arquivo.get(nome_arquivo, {}),
         })
 
+        _emitir_progresso(
+            progresso_callback,
+            etapa="arquivo_finalizado",
+            arquivo=nome_arquivo,
+            resultado=resultado,
+            motivo=motivo,
+            indice=indice_arquivo,
+            total_arquivos=len(arquivos_reprocessar),
+            pasta=pasta_reprocessar,
+        )
+
     # Se Reprocessar/ ficou vazia, exclui
     try:
         if os.path.exists(pasta_reprocessar) and not os.listdir(pasta_reprocessar):
@@ -1103,7 +1165,7 @@ def processar_pasta_reprocessar(driver, wait, pasta_reprocessar, pasta_sucesso, 
 
     return driver, wait
 
-def processar_arquivos(diretorio_origem, pasta_temp, log_file_path, usuario, senha, parar_event=None, automatico=False):
+def processar_arquivos(diretorio_origem, pasta_temp, log_file_path, usuario, senha, parar_event=None, automatico=False, progresso_callback=None):
     # automatico=True (--auto-start / agendador): ignora diretorio_origem e usa a pasta do mês atual,
     # verificando antes a Reprocessar/ do mês anterior
     global cliques_bloqueados_seguidos
@@ -1177,6 +1239,11 @@ def processar_arquivos(diretorio_origem, pasta_temp, log_file_path, usuario, sen
                 log("[INFO] Nada para processar: sem pasta do mês atual e sem pendências do mês anterior. O navegador não será aberto.", log_file)
             else:
                 # Abre o navegador já logado na página de Acordos (até MAX_TENTATIVAS_REINICIO tentativas)
+                _emitir_progresso(
+                    progresso_callback,
+                    etapa="navegador",
+                    mensagem="Abrindo o navegador e entrando no ComuniQ.",
+                )
                 driver, wait = _reiniciar_sessao(None, None, usuario, senha, log_file)
                 if not driver:
                     raise Exception(f"Não foi possível abrir o navegador e entrar no ComuniQ após {MAX_TENTATIVAS_REINICIO} tentativas.")
@@ -1187,10 +1254,11 @@ def processar_arquivos(diretorio_origem, pasta_temp, log_file_path, usuario, sen
                 driver, wait = processar_pasta_reprocessar(
                     driver, wait,
                     os.path.join(pasta_mes_anterior, nome_pasta_reprocessar), os.path.join(pasta_mes_anterior, nome_pasta_sucesso),
-                    log_file, usuario, senha, lojas_confirmadas_por_arquivo, resumo, parar_event
+                    log_file, usuario, senha, lojas_confirmadas_por_arquivo, resumo, parar_event,
+                    progresso_callback=progresso_callback
                 )
             if pasta_reprocessar:
-                driver, wait = processar_pasta_reprocessar(driver, wait, pasta_reprocessar, pasta_sucesso, log_file, usuario, senha, lojas_confirmadas_por_arquivo, resumo, parar_event)  # passa o resumo para registrar os resultados da Reprocessar/
+                driver, wait = processar_pasta_reprocessar(driver, wait, pasta_reprocessar, pasta_sucesso, log_file, usuario, senha, lojas_confirmadas_por_arquivo, resumo, parar_event, progresso_callback=progresso_callback)  # passa o resumo para registrar os resultados da Reprocessar/
 
             veio_da_reprocessar = base_normalizado == nome_pasta_reprocessar
 
@@ -1204,8 +1272,14 @@ def processar_arquivos(diretorio_origem, pasta_temp, log_file_path, usuario, sen
                 arquivos_para_processar = listar_arquivos_para_upload(diretorio_origem, log_file, resumo['fora_do_padrao'])
 
                 log(f"Encontrados {len(arquivos_para_processar)} arquivos para processar em '{diretorio_origem}'.", log_file)
+                _emitir_progresso(
+                    progresso_callback,
+                    etapa="inicio",
+                    total_arquivos=len(arquivos_para_processar),
+                    pasta=diretorio_origem,
+                )
 
-                for nome_arquivo in arquivos_para_processar:
+                for indice_arquivo, nome_arquivo in enumerate(arquivos_para_processar, start=1):
                     if parar_event and parar_event.is_set():
                         log("[INTERRUPÇÃO] Processo interrompido.", log_file); break
                     
@@ -1219,7 +1293,7 @@ def processar_arquivos(diretorio_origem, pasta_temp, log_file_path, usuario, sen
                     tentativas_sessao = 0
                     while True:
                         try:
-                            resultado, motivo = processar_um_unico_arquivo(driver, wait, nome_arquivo, log_file, lojas_confirmadas_por_arquivo.setdefault(nome_arquivo, {}))
+                            resultado, motivo = processar_um_unico_arquivo(driver, wait, nome_arquivo, log_file, lojas_confirmadas_por_arquivo.setdefault(nome_arquivo, {}), progresso_callback=progresso_callback)
                             break
                         except Exception as e:
                             if _sessao_morta(e) or isinstance(e, SessaoTravada):
@@ -1262,6 +1336,17 @@ def processar_arquivos(diretorio_origem, pasta_temp, log_file_path, usuario, sen
                         'motivo': motivo,
                         'lojas': lojas_confirmadas_por_arquivo.get(nome_arquivo, {}),
                     })
+
+                    _emitir_progresso(
+                        progresso_callback,
+                        etapa="arquivo_finalizado",
+                        arquivo=nome_arquivo,
+                        resultado=resultado,
+                        motivo=motivo,
+                        indice=indice_arquivo,
+                        total_arquivos=len(arquivos_para_processar),
+                        pasta=diretorio_origem,
+                    )
         
         except Exception as e:
             log(f"[ERRO FATAL] Ocorreu um erro geral no processo: {resumir_erro(e)}", log_file, espacamento=True)
@@ -1298,11 +1383,21 @@ def processar_arquivos(diretorio_origem, pasta_temp, log_file_path, usuario, sen
         arquivo_relatorio.write(montar_relatorio(resumo, data_inicio))
 
     if parar_event and parar_event.is_set():
+        mensagem_final = "Processo interrompido. O relatório não será enviado."
         print("[EMAIL] Não enviado: o processo foi interrompido pelo usuário.")
     elif resumo['erro_fatal'] and not resumo['arquivos']:
         # O robô não conseguiu rodar (Chrome, login, pasta do mês...) e nenhum arquivo foi processado
+        mensagem_final = "O robô não conseguiu rodar. Veja o log para mais detalhes."
         print("[EMAIL] Não enviado: o robô não conseguiu rodar. Veja o log_historico.txt.")
     else:
+        mensagem_final = "Preparando o relatório e enviando o e-mail."
         print("[EMAIL] Enviando relatório da execução...")
         enviar_relatorio(resumo, data_inicio, log_file_path, relatorio_path)  # erros do envio vão para o log técnico
+
+    _emitir_progresso(
+        progresso_callback,
+        etapa="finalizando",
+        mensagem=mensagem_final,
+        erro_fatal=resumo['erro_fatal'],
+    )
     return resultados_finais_falhas  # retorno mantido (lista de falhas) para não mudar o contrato com a interface
